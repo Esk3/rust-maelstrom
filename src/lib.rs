@@ -54,7 +54,7 @@ where
     loop {
         tokio::select! {
             Ok(Some(line)) = lines.next_line() => {
-                handle_input(line, node.clone(), &mut set, &mut connections, &mut next_id, handler.clone()).await;
+                handle_input(&line, node.clone(), &mut set, &mut connections, &mut next_id, handler.clone());
             },
             Some(join_handler) = set.join_next() => {
                 let id = join_handler.unwrap();
@@ -63,8 +63,8 @@ where
         }
     }
 }
-async fn handle_input<N, F, Fut, M, P, R>(
-    input: String,
+fn handle_input<N, F, Fut, M, P, R>(
+    input: &str,
     state: std::sync::Arc<std::sync::Mutex<N>>,
     set: &mut tokio::task::JoinSet<usize>,
     connections: &mut std::collections::HashMap<
@@ -89,7 +89,7 @@ async fn handle_input<N, F, Fut, M, P, R>(
     P: DeserializeOwned + Debug + Send + 'static,
     R: DeserializeOwned + Debug + Send + 'static,
 {
-    let message_type: MessageType<M, P, R> = serde_json::from_str(&input).unwrap();
+    let message_type: MessageType<M, P, R> = serde_json::from_str(input).unwrap();
     let id = *next_id;
     *next_id += 1;
     match message_type {

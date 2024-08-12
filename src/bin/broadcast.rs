@@ -48,7 +48,7 @@ async fn handler(
                     }
                     let messages = {
                         let mut node = node.lock().unwrap();
-                        let Some(messages) = node.broadcast(message, id, src) else {
+                        let Some(messages) = node.broadcast(&message, id, &src) else {
                             return;
                         };
                         messages
@@ -85,7 +85,7 @@ async fn handler(
                         let output = std::io::stdout().lock();
                         let messages = {
                             let mut node = node.lock().unwrap();
-                            node.broadcast(message, id, src)
+                            node.broadcast(&message, id, &src)
                         };
                         reply
                             .with_body(peer.with_body(PeerResponse::BroadcastOk))
@@ -126,11 +126,11 @@ impl Node for BroadcastNode {
 impl BroadcastNode {
     pub fn broadcast(
         &mut self,
-        message: serde_json::Value,
+        message: &serde_json::Value,
         id: usize,
-        src: String,
+        src: &str,
     ) -> Option<Vec<Message<PeerMessage<PeerRequest>>>> {
-        if self.messages.contains(&message) {
+        if self.messages.contains(message) {
             return None;
         }
         self.messages.push(message.clone());
@@ -139,7 +139,7 @@ impl BroadcastNode {
             .neighbors
             .clone()
             .into_iter()
-            .filter(|neighbor| neighbor != &src)
+            .filter(|neighbor| neighbor != src)
             .enumerate()
             .map(|(i, neighbor)| Message {
                 src: self.id.clone(),

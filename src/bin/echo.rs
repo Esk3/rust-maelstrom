@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    main_loop(handle_message).await
+    main_loop(handle_message).await;
 }
 
 struct EchoNode {
@@ -23,8 +23,8 @@ impl Node for EchoNode {
 async fn handle_message(
     message: Request<MessageRequest, ()>,
     _node: std::sync::Arc<std::sync::Mutex<EchoNode>>,
-    _id: usize,
-    mut _input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<()>>>,
+    _: usize,
+    _: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<()>>>,
 ) {
     match message {
         Request::Maelstrom(message) => {
