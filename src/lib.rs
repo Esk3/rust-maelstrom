@@ -1,25 +1,28 @@
 use std::{fmt::Debug, future::Future};
 
-use message::{InitRequest, InitResponse, Message, MessageRequest, MessageResponse};
+use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
 
 pub mod message;
 
-async fn main_loop<N, R, F, T, Fut>(handler: F)
+pub async fn main_loop<N, M, P, R, F, Fut>(handler: F)
 where
     N: Node + Send + 'static,
     F: Fn(
-            Message<T>,
+            Request<M, P>,
             std::sync::Arc<std::sync::Mutex<N>>,
             usize,
-            tokio::sync::mpsc::UnboundedReceiver<String>,
+            tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<R>>>,
         ) -> Fut
         + Send
         + Sync
-        + 'static,
+        + 'static
+        + Clone,
     Fut: Future + Send + Sync,
-    T: DeserializeOwned + Debug + Send + 'static,
+    M: DeserializeOwned + Debug + Send + 'static,
+    P: DeserializeOwned + Debug + Send + 'static,
+    R: DeserializeOwned + Debug + Send + 'static,
 {
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
@@ -52,7 +55,7 @@ where
     loop {
         tokio::select! {
             Ok(Some(line)) = lines.next_line() => {
-                handle_input(line, node.clone(), &mut set, &mut connections, &mut next_id, &handler).await;
+                handle_input(line, node.clone(), &mut set, &mut connections, &mut next_id, handler.clone()).await;
             },
             Some(join_handler) = set.join_next() => {
                 let id = join_handler.unwrap();
@@ -61,36 +64,52 @@ where
         }
     }
 }
-async fn handle_input<N, F, Fut, T>(
+async fn handle_input<N, F, Fut, M, P, R>(
     input: String,
     state: std::sync::Arc<std::sync::Mutex<N>>,
     set: &mut tokio::task::JoinSet<usize>,
-    connections: &mut std::collections::HashMap<usize, tokio::sync::mpsc::UnboundedSender<String>>,
+    connections: &mut std::collections::HashMap<
+        usize,
+        tokio::sync::mpsc::UnboundedSender<Message<PeerMessage<R>>>,
+    >,
     next_id: &mut usize,
-    handler: &F,
+    handler: F,
 ) where
     N: Node + Send + 'static,
     F: Fn(
-            Message<T>,
+            Request<M, P>,
             std::sync::Arc<std::sync::Mutex<N>>,
             usize,
-            tokio::sync::mpsc::UnboundedReceiver<String>,
+            tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<R>>>,
         ) -> Fut
         + Send
         + Sync
         + 'static,
     Fut: Future + Send + Sync,
-    T: DeserializeOwned + Debug + Send + 'static,
+    M: DeserializeOwned + Debug + Send + 'static,
+    P: DeserializeOwned + Debug + Send + 'static,
+    R: DeserializeOwned + Debug + Send + 'static,
 {
-    let message: Message<T> = serde_json::from_str(&input).unwrap();
+    let message_type: MessageType<M, P, R> = serde_json::from_str(&input).unwrap();
     let id = *next_id;
     *next_id += 1;
-    dbg!(&message);
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    set.spawn(async move {
-        handler(message, state, id, rx).await;
-        id
-    });
+    dbg!(&message_type);
+    match message_type {
+        MessageType::Request(message) => {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            connections.insert(id, tx);
+            set.spawn(async move {
+                handler(message, state, id, rx).await;
+                id
+            });
+        }
+        MessageType::Response(message) => {
+            let Some(tx) = connections.get(&message.body.dest) else {
+                return;
+            };
+            tx.send(message).unwrap();
+        }
+    }
 
     // match message {
     //     Message::New(_) => {

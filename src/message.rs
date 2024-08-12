@@ -27,6 +27,7 @@ impl<T> Message<T> {
         }
     }
 }
+
 impl<T> Message<T>
 where
     T: Serialize,
@@ -38,6 +39,28 @@ where
         serde_json::to_writer(&mut writer, self).unwrap();
         writer.write_all(b"\n").unwrap();
     }
+}
+
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum MessageType<M, P, R> {
+    Request(Request<M, P>),
+    Response(Message<PeerMessage<R>>)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Request<M, P> {
+    Maelstrom(Message<M>),
+    Peer(Message<PeerMessage<P>>)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PeerMessage<T> {
+    pub src: usize,
+    pub dest: usize,
+    pub body: T
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,22 +76,4 @@ pub enum InitRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InitResponse {
     InitOk { in_reply_to: usize },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MessageRequest {
-    Echo {
-        echo: serde_json::Value,
-        msg_id: usize,
-    },
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MessageResponse {
-    EchoOk {
-        echo: serde_json::Value,
-        in_reply_to: usize,
-    },
 }
