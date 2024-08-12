@@ -6,15 +6,19 @@ async fn main() {
     let mut lines = tokio::io::BufReader::new(stdin).lines();
 
     let mut set = tokio::task::JoinSet::new();
-    let mut s = "hey";
+    let mut connections = std::collections::HashMap::new();
+    let mut next_id = 1;
     let state = std::sync::Arc::new(std::sync::Mutex::new(Node { id: 1 }));
 
     loop {
         tokio::select! {
             Ok(Some(line)) = lines.next_line() => {
-                handle_input(line, &state, &mut set).await;
+                handle_input(line, state.clone(), &mut set, &mut connections, &mut next_id).await;
             },
             Some(t) = set.join_next() => {
+                let t = t.unwrap();
+                let id = t.1;
+                connections.remove(&id);
                 dbg!("task done", t);
             }
         }
@@ -23,17 +27,36 @@ async fn main() {
 
 async fn handle_input(
     input: String,
-    state: &std::sync::Arc<std::sync::Mutex<Node>>,
-    set: &mut tokio::task::JoinSet<String>,
+    state: std::sync::Arc<std::sync::Mutex<Node>>,
+    set: &mut tokio::task::JoinSet<(String, usize)>,
+    connections: &mut std::collections::HashMap<usize, tokio::sync::mpsc::UnboundedSender<String>>,
+    next_id: &mut usize,
 ) {
-    let line = input;
-    let message = Message::new(line);
+    let message = Message::new(input);
+    let id = *next_id;
+    *next_id += 1;
     dbg!(&message);
-    let state = state.clone();
-    set.spawn(async move { handle_message(message, state).await });
+    match message {
+        Message::New(_) => {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            connections.insert(id, tx);
+            set.spawn(async move { (handle_message(message, state, id, rx).await, id) });
+        }
+        Message::Reply { id, msg } => {
+            let Some(tx) = connections.get(&id) else {
+                return;
+            };
+            tx.send(msg).unwrap()
+        }
+    };
 }
 
-async fn handle_message(msg: Message, s: std::sync::Arc<std::sync::Mutex<Node>>) -> String {
+async fn handle_message(
+    msg: Message,
+    s: std::sync::Arc<std::sync::Mutex<Node>>,
+    id: usize,
+    mut input: tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> String {
     dbg!("handing message: ", &msg);
     match msg {
         Message::New(msg) => match msg.as_str() {
@@ -47,6 +70,12 @@ async fn handle_message(msg: Message, s: std::sync::Arc<std::sync::Mutex<Node>>)
             "print" => {
                 let _lock = s.lock().unwrap();
                 dbg!("hello world");
+            }
+            "reply" => {
+                dbg!("awaiting reply on", id);
+                let reply = input.recv().await.unwrap();
+                dbg!("got reply: ", reply);
+                return "Ok Reply.".to_string();
             }
             _ => {
                 dbg!("unknown command");
