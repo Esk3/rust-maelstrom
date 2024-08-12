@@ -89,6 +89,30 @@ impl<T> PeerMessage<T> {
     }
 }
 
+pub async fn send_messages_with_retry<T, B>(
+    mut messages: Vec<Message<PeerMessage<T>>>,
+    interval: std::time::Duration,
+    mut input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<B>>>,
+) where
+    T: Serialize,
+{
+    let mut interval = tokio::time::interval(interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    while !messages.is_empty() {
+        tokio::select! {
+            _ = interval.tick() => {
+                let mut out = std::io::stdout().lock();
+                for message in &messages {
+                    message.send(&mut out);
+                }
+            },
+            Some(response) = input.recv() => {
+                messages.retain(|message| !message.body.matches_response(&response));
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InitRequest {

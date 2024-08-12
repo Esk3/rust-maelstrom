@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rust_maelstrom::{
     main_loop,
-    message::{self, Message, PeerMessage},
+    message::{self, send_messages_with_retry, Message, PeerMessage},
     Node,
 };
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ async fn handler(
     message: message::Request<Request, PeerRequest>,
     node: std::sync::Arc<std::sync::Mutex<BroadcastNode>>,
     id: usize,
-    mut input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
+    input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
 ) {
     match message {
         message::Request::Maelstrom(message) => {
@@ -46,7 +46,7 @@ async fn handler(
                         };
                         reply.with_body(body).send(out);
                     }
-                    let mut messages = {
+                    let messages = {
                         let mut node = node.lock().unwrap();
                         let Some(messages) = node.broadcast(message, id, src) else {
                             return;
@@ -54,20 +54,12 @@ async fn handler(
                         messages
                     };
 
-                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
-                    while !messages.is_empty() {
-                        tokio::select! {
-                            _ = interval.tick() => {
-                                let mut out = std::io::stdout().lock();
-                                for message in &messages {
-                                    message.send(&mut out);
-                                }
-                            },
-                            Some(response) = input.recv() => {
-                                messages.retain(|message| !message.body.matches_response(&response));
-                            }
-                        }
-                    }
+                    send_messages_with_retry(
+                        messages,
+                        std::time::Duration::from_millis(100),
+                        input,
+                    )
+                    .await;
                 }
                 Request::Read { msg_id } => {
                     let messages = {
@@ -89,7 +81,7 @@ async fn handler(
             let (peer, body) = peer.into_reply(id);
             match body {
                 PeerRequest::Broadcast { message } => {
-                    let mut messages = {
+                    let messages = {
                         let output = std::io::stdout().lock();
                         let messages = {
                             let mut node = node.lock().unwrap();
@@ -104,23 +96,12 @@ async fn handler(
                         }
                     };
 
-                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
-
-                    while !messages.is_empty() {
-                        tokio::select! {
-                            _ = interval.tick() => {
-                                {
-                                    let mut out = std::io::stdout().lock();
-                                    for message in &messages {
-                                        message.send(&mut out);
-                                    }
-                                }
-                            },
-                            Some(message) = input.recv() => {
-                                messages.retain(|m| !m.body.matches_response(&message));
-                            }
-                        }
-                    }
+                    send_messages_with_retry(
+                        messages,
+                        std::time::Duration::from_millis(100),
+                        input,
+                    )
+                    .await;
                 }
             }
         }
