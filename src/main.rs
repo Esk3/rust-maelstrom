@@ -107,7 +107,9 @@ struct Node {
 
 impl Node {
     pub fn init() -> Self {
-        todo!()
+        Self {
+            id: 1
+        }
     }
     pub fn handle_message(&mut self) {}
 }
