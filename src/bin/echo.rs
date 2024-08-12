@@ -11,20 +11,20 @@ async fn main() {
 }
 
 struct EchoNode {
-    pub id: String,
+    pub _id: String,
 }
 
 impl Node for EchoNode {
-    fn init(node_id: String, node_ids: Vec<String>) -> Self {
-        Self { id: node_id }
+    fn init(node_id: String, _node_ids: Vec<String>) -> Self {
+        Self { _id: node_id }
     }
 }
 
 async fn handle_message(
     message: Request<MessageRequest, ()>,
-    node: std::sync::Arc<std::sync::Mutex<EchoNode>>,
-    id: usize,
-    mut input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<()>>>,
+    _node: std::sync::Arc<std::sync::Mutex<EchoNode>>,
+    _id: usize,
+    mut _input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<()>>>,
 ) {
     match message {
         Request::Maelstrom(message) => {
@@ -41,10 +41,8 @@ async fn handle_message(
             }
         }
         Request::Peer(message) => {
-            let (reply, body) = message.into_reply();
-            match body.body {
-                () => unimplemented!(),
-            }
+            let (_reply, _body) = message.into_reply();
+            unimplemented!()
         }
     }
 }
