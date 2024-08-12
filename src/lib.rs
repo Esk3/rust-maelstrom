@@ -1,7 +1,6 @@
-use std::{fmt::Debug, future::Future};
-
 use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
 use serde::de::DeserializeOwned;
+use std::{fmt::Debug, future::Future};
 use tokio::io::AsyncBufReadExt;
 
 pub mod message;
@@ -110,20 +109,6 @@ async fn handle_input<N, F, Fut, M, P, R>(
             tx.send(message).unwrap();
         }
     }
-
-    // match message {
-    //     Message::New(_) => {
-    //         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    //         connections.insert(id, tx);
-    //         set.spawn(async move { (handle_message(message, state, id, rx).await, id) });
-    //     }
-    //     Message::Reply { id, msg } => {
-    //         let Some(tx) = connections.get(&id) else {
-    //             return;
-    //         };
-    //         tx.send(msg).unwrap()
-    //     }
-    // };
 }
 
 pub trait Node {
