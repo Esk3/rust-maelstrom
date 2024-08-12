@@ -92,7 +92,6 @@ async fn handle_input<N, F, Fut, M, P, R>(
     let message_type: MessageType<M, P, R> = serde_json::from_str(&input).unwrap();
     let id = *next_id;
     *next_id += 1;
-    dbg!(&message_type);
     match message_type {
         MessageType::Request(message) => {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

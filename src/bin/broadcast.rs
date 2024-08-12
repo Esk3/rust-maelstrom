@@ -16,7 +16,7 @@ async fn handler(
     message: message::Request<Request, PeerRequest>,
     node: std::sync::Arc<std::sync::Mutex<BroadcastNode>>,
     id: usize,
-    mut _input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
+    input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
 ) {
     match message {
         message::Request::Maelstrom(message) => {
@@ -38,27 +38,15 @@ async fn handler(
                     reply.with_body(body).send(&mut output);
                 }
                 Request::Broadcast { message, msg_id } => {
-                    let mut lock = node.lock().unwrap();
-                    if lock.messages.contains(&message) {
-                        return;
-                    }
-                    lock.messages.push(message.clone());
+                    let mut node = node.lock().unwrap();
 
                     let mut output = std::io::stdout().lock();
-                    for neighbor in &lock.neighbors {
-                        Message {
-                            src: lock.id.clone(),
-                            dest: neighbor.clone(),
-                            body: PeerMessage {
-                                src: id,
-                                dest: None,
-                                body: PeerRequest::Broadcast {
-                                    message: message.clone(),
-                                },
-                            },
+                    if let Some(messages) = node.broadcast(message, id, input) {
+                        for message in messages {
+                            message.send(&mut output);
                         }
-                        .send(&mut output);
                     }
+
                     let body = Response::BroadcastOk {
                         in_reply_to: msg_id,
                     };
@@ -79,30 +67,23 @@ async fn handler(
             }
         }
         message::Request::Peer(message) => {
-            let (_reply, peer) = message.into_reply();
+            let (reply, peer) = message.into_reply();
             match peer.body {
                 PeerRequest::Broadcast { message } => {
-                    let mut lock = node.lock().unwrap();
-                    if lock.messages.contains(&message) {
-                        return;
-                    }
-                    lock.messages.push(message.clone());
-
+                    let mut node = node.lock().unwrap();
                     let mut output = std::io::stdout().lock();
-                    for neighbor in &lock.neighbors {
-                        Message {
-                            src: lock.id.clone(),
-                            dest: neighbor.clone(),
-                            body: PeerMessage {
-                                src: id,
-                                dest: None,
-                                body: PeerRequest::Broadcast {
-                                    message: message.clone(),
-                                },
-                            },
+                    if let Some(messages) = node.broadcast(message, id, input) {
+                        for message in messages {
+                            message.send(&mut output);
                         }
-                        .send(&mut output);
                     }
+                    reply
+                        .with_body(PeerMessage {
+                            src: id,
+                            dest: Some(peer.src),
+                            body: PeerResponse::BroadcastOk,
+                        })
+                        .send(output);
                 }
             }
         }
@@ -121,6 +102,38 @@ impl Node for BroadcastNode {
             neighbors: Vec::new(),
             messages: Vec::new(),
         }
+    }
+}
+
+impl BroadcastNode {
+    pub fn broadcast(
+        &mut self,
+        message: serde_json::Value,
+        id: usize,
+        mut _input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
+    ) -> Option<Vec<Message<PeerMessage<PeerRequest>>>> {
+        if self.messages.contains(&message) {
+            return None;
+        }
+        self.messages.push(message.clone());
+
+        let messages = self
+            .neighbors
+            .clone()
+            .into_iter()
+            .map(|neighbor| Message {
+                src: self.id.clone(),
+                dest: neighbor,
+                body: PeerMessage {
+                    src: id,
+                    dest: None,
+                    body: PeerRequest::Broadcast {
+                        message: message.clone(),
+                    },
+                },
+            })
+            .collect();
+        Some(messages)
     }
 }
 
@@ -159,4 +172,6 @@ pub enum PeerRequest {
     Broadcast { message: serde_json::Value },
 }
 #[derive(Debug, Serialize, Deserialize)]
-pub enum PeerResponse {}
+pub enum PeerResponse {
+    BroadcastOk,
+}

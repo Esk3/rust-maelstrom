@@ -28,7 +28,6 @@ async fn handle_message(
 ) {
     match message {
         Request::Maelstrom(message) => {
-            dbg!("handing message: ", &message);
             let (reply, body) = message.into_reply();
             match body {
                 MessageRequest::Echo { echo, msg_id } => {
