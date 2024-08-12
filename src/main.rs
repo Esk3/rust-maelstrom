@@ -1,17 +1,9 @@
-use std::io::BufRead;
+use tokio::io::AsyncBufReadExt;
 
 #[tokio::main]
 async fn main() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-    std::thread::spawn(move || {
-        let stdin = std::io::stdin().lock();
-        let lines = stdin.lines();
-        for line in lines {
-            let line = line.unwrap();
-            tx.send(line).unwrap();
-        }
-    });
+    let stdin = tokio::io::stdin();
+    let mut lines = tokio::io::BufReader::new(stdin).lines();
 
     let mut set = tokio::task::JoinSet::new();
     let mut s = "hey";
@@ -19,13 +11,9 @@ async fn main() {
 
     loop {
         tokio::select! {
-            msg = rx.recv() => {
-                let state = state.clone();
-                set.spawn(async move {
-                    let msg = msg.unwrap();
-                    handle_message(&msg, state).await
-                });
-            }
+            Ok(Some(line)) = lines.next_line() => {
+                handle_input(line, &state, &mut set).await;
+            },
             Some(t) = set.join_next() => {
                 dbg!("task done", t);
             }
@@ -33,23 +21,38 @@ async fn main() {
     }
 }
 
-async fn handle_message(msg: &str, s: std::sync::Arc<std::sync::Mutex<Node>>) -> String {
+async fn handle_input(
+    input: String,
+    state: &std::sync::Arc<std::sync::Mutex<Node>>,
+    set: &mut tokio::task::JoinSet<String>,
+) {
+    let line = input;
+    let message = Message::new(line);
+    dbg!(&message);
+    let state = state.clone();
+    set.spawn(async move { handle_message(message, state).await });
+}
+
+async fn handle_message(msg: Message, s: std::sync::Arc<std::sync::Mutex<Node>>) -> String {
     dbg!("handing message: ", &msg);
     match msg {
-        "sleep" => {
-            {
-                let lock = s.lock().unwrap();
-                dbg!(lock.id);
+        Message::New(msg) => match msg.as_str() {
+            "sleep" => {
+                {
+                    let lock = s.lock().unwrap();
+                    dbg!(lock.id);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-        "print" => {
-            let lock = s.lock().unwrap();
-            dbg!("hello world");
-        }
-        _ => {
-            dbg!("unknown command");
-        }
+            "print" => {
+                let _lock = s.lock().unwrap();
+                dbg!("hello world");
+            }
+            _ => {
+                dbg!("unknown command");
+            }
+        },
+        Message::Reply { id, msg } => todo!(),
     }
     "Ok".to_string()
 }
@@ -60,4 +63,35 @@ struct Node {
 
 impl Node {
     pub fn handle_message(&mut self) {}
+}
+
+#[derive(Debug)]
+enum Message {
+    New(String),
+    Reply { id: usize, msg: String },
+}
+
+impl Message {
+    pub fn new(s: String) -> Self {
+        if let Some(reply) = Self::parse_reply(&s) {
+            reply
+        } else {
+            Self::New(s)
+        }
+    }
+    fn parse_reply(s: &str) -> Option<Self> {
+        let mut sp = s.splitn(3, ' ');
+        if sp.next() != Some("conn") {
+            return None;
+        }
+        if let Some(id) = sp.next() {
+            let id = id.parse().ok()?;
+            Some(Self::Reply {
+                id,
+                msg: sp.next()?.to_string(),
+            })
+        } else {
+            None
+        }
+    }
 }
