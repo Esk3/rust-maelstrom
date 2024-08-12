@@ -1,24 +1,48 @@
+use std::{fmt::Debug, future::Future};
+
 use message::{InitRequest, InitResponse, Message, MessageRequest, MessageResponse};
+use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
 
 pub mod message;
 
-#[tokio::main]
-async fn main() {
+async fn main_loop<N, R, F, T, Fut>(handler: F)
+where
+    N: Node + Send + 'static,
+    F: Fn(
+            Message<T>,
+            std::sync::Arc<std::sync::Mutex<N>>,
+            usize,
+            tokio::sync::mpsc::UnboundedReceiver<String>,
+        ) -> Fut
+        + Send
+        + Sync
+        + 'static,
+    Fut: Future + Send + Sync,
+    T: DeserializeOwned + Debug + Send + 'static,
+{
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
 
     let init_line = lines.next_line().await.unwrap().unwrap();
     let init_message: Message<InitRequest> = serde_json::from_str(&init_line).unwrap();
     let (reply, body) = init_message.into_reply();
-    let InitRequest::Init { msg_id, node_id, node_ids } = body;
+    let InitRequest::Init {
+        msg_id,
+        node_id,
+        node_ids,
+    } = body;
 
     let node = Node::init(node_id, node_ids);
     let node = std::sync::Arc::new(std::sync::Mutex::new(node));
 
     {
         let mut output = std::io::stdout().lock();
-        reply.with_body(InitResponse::InitOk { in_reply_to: msg_id }).send(&mut output);
+        reply
+            .with_body(InitResponse::InitOk {
+                in_reply_to: msg_id,
+            })
+            .send(&mut output);
     }
 
     let mut set = tokio::task::JoinSet::new();
@@ -28,29 +52,45 @@ async fn main() {
     loop {
         tokio::select! {
             Ok(Some(line)) = lines.next_line() => {
-                handle_input(line, node.clone(), &mut set, &mut connections, &mut next_id).await;
+                handle_input(line, node.clone(), &mut set, &mut connections, &mut next_id, &handler).await;
             },
             Some(join_handler) = set.join_next() => {
-                let (_msg, id) = join_handler.unwrap();
+                let id = join_handler.unwrap();
                 connections.remove(&id);
             }
         }
     }
 }
-
-async fn handle_input(
+async fn handle_input<N, F, Fut, T>(
     input: String,
-    state: std::sync::Arc<std::sync::Mutex<Node>>,
-    set: &mut tokio::task::JoinSet<(String, usize)>,
+    state: std::sync::Arc<std::sync::Mutex<N>>,
+    set: &mut tokio::task::JoinSet<usize>,
     connections: &mut std::collections::HashMap<usize, tokio::sync::mpsc::UnboundedSender<String>>,
     next_id: &mut usize,
-) {
-    let message: Message<MessageRequest> = serde_json::from_str(&input).unwrap();
+    handler: &F,
+) where
+    N: Node + Send + 'static,
+    F: Fn(
+            Message<T>,
+            std::sync::Arc<std::sync::Mutex<N>>,
+            usize,
+            tokio::sync::mpsc::UnboundedReceiver<String>,
+        ) -> Fut
+        + Send
+        + Sync
+        + 'static,
+    Fut: Future + Send + Sync,
+    T: DeserializeOwned + Debug + Send + 'static,
+{
+    let message: Message<T> = serde_json::from_str(&input).unwrap();
     let id = *next_id;
     *next_id += 1;
     dbg!(&message);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    set.spawn(async move { (handle_message(message, state, id, rx).await, id) });
+    set.spawn(async move {
+        handler(message, state, id, rx).await;
+        id
+    });
 
     // match message {
     //     Message::New(_) => {
@@ -67,32 +107,6 @@ async fn handle_input(
     // };
 }
 
-async fn handle_message(
-    msg: Message<MessageRequest>,
-    node: std::sync::Arc<std::sync::Mutex<Node>>,
-    id: usize,
-    mut input: tokio::sync::mpsc::UnboundedReceiver<String>,
-) -> String {
-    dbg!("handing message: ", &msg);
-    let (reply, body) = msg.into_reply();
-    match body {
-        MessageRequest::Echo { echo, msg_id } => {
-            let body = MessageResponse::EchoOk { echo , in_reply_to: msg_id };
-            reply.with_body(body).send(&mut std::io::stdout().lock());
-        }
-    }
-    "Ok".to_string()
-}
-
-struct Node {
-    pub id: String,
-}
-
-impl Node {
-    pub fn init(node_id: String, node_ids: Vec<String>) -> Self {
-        Self {
-            id: node_id
-        }
-    }
-    pub fn handle_message(&mut self) {}
+pub trait Node {
+    fn init(node_id: String, node_ids: Vec<String>) -> Self;
 }
