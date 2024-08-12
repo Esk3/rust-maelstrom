@@ -1,9 +1,17 @@
+use message::{InitRequest, Message as MaelstromMessage, MessageRequest};
 use tokio::io::AsyncBufReadExt;
+
+pub mod message;
 
 #[tokio::main]
 async fn main() {
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
+
+    let init_line = lines.next_line().await.unwrap().unwrap();
+    let init_message: MaelstromMessage<InitRequest> = serde_json::from_str(&init_line).unwrap();
+
+    let node = Node::init();
 
     let mut set = tokio::task::JoinSet::new();
     let mut connections = std::collections::HashMap::new();
@@ -15,11 +23,9 @@ async fn main() {
             Ok(Some(line)) = lines.next_line() => {
                 handle_input(line, state.clone(), &mut set, &mut connections, &mut next_id).await;
             },
-            Some(t) = set.join_next() => {
-                let t = t.unwrap();
-                let id = t.1;
+            Some(join_handler) = set.join_next() => {
+                let (_msg, id) = join_handler.unwrap();
                 connections.remove(&id);
-                dbg!("task done", t);
             }
         }
     }
@@ -32,7 +38,7 @@ async fn handle_input(
     connections: &mut std::collections::HashMap<usize, tokio::sync::mpsc::UnboundedSender<String>>,
     next_id: &mut usize,
 ) {
-    let message = Message::new(input);
+    let message: MaelstromMessage<MessageRequest> = serde_json::from_str(&input).unwrap();
     let id = *next_id;
     *next_id += 1;
     dbg!(&message);
@@ -91,6 +97,9 @@ struct Node {
 }
 
 impl Node {
+    pub fn init() -> Self {
+        todo!()
+    }
     pub fn handle_message(&mut self) {}
 }
 
