@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use message::{InitRequest, InitResponse, Message, MessageRequest, MessageResponse};
 use tokio::io::AsyncBufReadExt;
 
@@ -12,32 +10,25 @@ async fn main() {
 
     let init_line = lines.next_line().await.unwrap().unwrap();
     let init_message: Message<InitRequest> = serde_json::from_str(&init_line).unwrap();
+    let (reply, body) = init_message.into_reply();
+    let InitRequest::Init { msg_id, node_id, node_ids } = body;
 
-    let node = Node::init();
+    let node = Node::init(node_id, node_ids);
+    let node = std::sync::Arc::new(std::sync::Mutex::new(node));
 
     {
         let mut output = std::io::stdout().lock();
-        let InitRequest::Init { msg_id, .. } = init_message.body;
-        let message = Message {
-            src: init_message.dest,
-            dest: init_message.src,
-            body: InitResponse::InitOk {
-                in_reply_to: msg_id,
-            },
-        };
-        serde_json::to_writer(&mut output, &message);
-        output.write_all(b"\n").unwrap();
+        reply.with_body(InitResponse::InitOk { in_reply_to: msg_id }).send(&mut output);
     }
 
     let mut set = tokio::task::JoinSet::new();
     let mut connections = std::collections::HashMap::new();
     let mut next_id = 1;
-    let state = std::sync::Arc::new(std::sync::Mutex::new(Node { id: 1 }));
 
     loop {
         tokio::select! {
             Ok(Some(line)) = lines.next_line() => {
-                handle_input(line, state.clone(), &mut set, &mut connections, &mut next_id).await;
+                handle_input(line, node.clone(), &mut set, &mut connections, &mut next_id).await;
             },
             Some(join_handler) = set.join_next() => {
                 let (_msg, id) = join_handler.unwrap();
@@ -78,37 +69,29 @@ async fn handle_input(
 
 async fn handle_message(
     msg: Message<MessageRequest>,
-    s: std::sync::Arc<std::sync::Mutex<Node>>,
+    node: std::sync::Arc<std::sync::Mutex<Node>>,
     id: usize,
     mut input: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> String {
     dbg!("handing message: ", &msg);
-    match msg.body {
+    let (reply, body) = msg.into_reply();
+    match body {
         MessageRequest::Echo { echo, msg_id } => {
-            let message = Message {
-                src: msg.dest,
-                dest: msg.src,
-                body: MessageResponse::EchoOk {
-                    echo,
-                    in_reply_to: msg_id,
-                },
-            };
-            let mut output = std::io::stdout().lock();
-            serde_json::to_writer(&mut output, &message).unwrap();
-            output.write_all(b"\n").unwrap();
+            let body = MessageResponse::EchoOk { echo , in_reply_to: msg_id };
+            reply.with_body(body).send(&mut std::io::stdout().lock());
         }
     }
     "Ok".to_string()
 }
 
 struct Node {
-    pub id: usize,
+    pub id: String,
 }
 
 impl Node {
-    pub fn init() -> Self {
+    pub fn init(node_id: String, node_ids: Vec<String>) -> Self {
         Self {
-            id: 1
+            id: node_id
         }
     }
     pub fn handle_message(&mut self) {}
