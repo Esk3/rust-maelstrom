@@ -41,26 +41,52 @@ where
     }
 }
 
-
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum MessageType<M, P, R> {
     Request(Request<M, P>),
-    Response(Message<PeerMessage<R>>)
+    Response(Message<PeerMessage<R>>),
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Request<M, P> {
     Maelstrom(Message<M>),
-    Peer(Message<PeerMessage<P>>)
+    Peer(Message<PeerMessage<P>>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PeerMessage<T> {
     pub src: usize,
     pub dest: Option<usize>,
-    pub body: T
+    pub id: usize,
+    pub body: T,
+}
+
+impl<T> PeerMessage<T> {
+    pub fn into_reply(self, src: usize) -> (PeerMessage<()>, T) {
+        let body = self.body;
+        (
+            PeerMessage {
+                src,
+                dest: Some(self.src),
+                id: self.id,
+                body: (),
+            },
+            body,
+        )
+    }
+    pub fn with_body<B>(self, body: B) -> PeerMessage<B> {
+        PeerMessage {
+            src: self.src,
+            dest: self.dest,
+            id: self.id,
+            body,
+        }
+    }
+    pub fn matches_response<B>(&self, res: &Message<PeerMessage<B>>) -> bool {
+        res.body.id == self.id
+    }
 }
 
 #[derive(Debug, Deserialize)]

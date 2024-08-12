@@ -16,10 +16,11 @@ async fn handler(
     message: message::Request<Request, PeerRequest>,
     node: std::sync::Arc<std::sync::Mutex<BroadcastNode>>,
     id: usize,
-    input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
+    mut input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
 ) {
     match message {
         message::Request::Maelstrom(message) => {
+            let src = message.src.clone();
             let (reply, body) = message.into_reply();
             match body {
                 Request::Topology {
@@ -38,19 +39,35 @@ async fn handler(
                     reply.with_body(body).send(&mut output);
                 }
                 Request::Broadcast { message, msg_id } => {
-                    let mut node = node.lock().unwrap();
+                    {
+                        let out = std::io::stdout().lock();
+                        let body = Response::BroadcastOk {
+                            in_reply_to: msg_id,
+                        };
+                        reply.with_body(body).send(out);
+                    }
+                    let mut messages = {
+                        let mut node = node.lock().unwrap();
+                        let Some(messages) = node.broadcast(message, id, src) else {
+                            return;
+                        };
+                        messages
+                    };
 
-                    let mut output = std::io::stdout().lock();
-                    if let Some(messages) = node.broadcast(message, id, input) {
-                        for message in messages {
-                            message.send(&mut output);
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                    while !messages.is_empty() {
+                        tokio::select! {
+                            _ = interval.tick() => {
+                                let mut out = std::io::stdout().lock();
+                                for message in &messages {
+                                    message.send(&mut out);
+                                }
+                            },
+                            Some(response) = input.recv() => {
+                                messages.retain(|message| !message.body.matches_response(&response));
+                            }
                         }
                     }
-
-                    let body = Response::BroadcastOk {
-                        in_reply_to: msg_id,
-                    };
-                    reply.with_body(body).send(&mut output);
                 }
                 Request::Read { msg_id } => {
                     let messages = {
@@ -67,23 +84,43 @@ async fn handler(
             }
         }
         message::Request::Peer(message) => {
+            let src = message.src.clone();
             let (reply, peer) = message.into_reply();
-            match peer.body {
+            let (peer, body) = peer.into_reply(id);
+            match body {
                 PeerRequest::Broadcast { message } => {
-                    let mut node = node.lock().unwrap();
-                    let mut output = std::io::stdout().lock();
-                    if let Some(messages) = node.broadcast(message, id, input) {
-                        for message in messages {
-                            message.send(&mut output);
+                    let mut messages = {
+                        let output = std::io::stdout().lock();
+                        let messages = {
+                            let mut node = node.lock().unwrap();
+                            node.broadcast(message, id, src)
+                        };
+                        reply
+                            .with_body(peer.with_body(PeerResponse::BroadcastOk))
+                            .send(output);
+                        match messages {
+                            Some(messages) => messages,
+                            None => return,
+                        }
+                    };
+
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+
+                    while !messages.is_empty() {
+                        tokio::select! {
+                            _ = interval.tick() => {
+                                {
+                                    let mut out = std::io::stdout().lock();
+                                    for message in &messages {
+                                        message.send(&mut out);
+                                    }
+                                }
+                            },
+                            Some(message) = input.recv() => {
+                                messages.retain(|m| !m.body.matches_response(&message));
+                            }
                         }
                     }
-                    reply
-                        .with_body(PeerMessage {
-                            src: id,
-                            dest: Some(peer.src),
-                            body: PeerResponse::BroadcastOk,
-                        })
-                        .send(output);
                 }
             }
         }
@@ -110,7 +147,7 @@ impl BroadcastNode {
         &mut self,
         message: serde_json::Value,
         id: usize,
-        mut _input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
+        src: String,
     ) -> Option<Vec<Message<PeerMessage<PeerRequest>>>> {
         if self.messages.contains(&message) {
             return None;
@@ -121,12 +158,15 @@ impl BroadcastNode {
             .neighbors
             .clone()
             .into_iter()
-            .map(|neighbor| Message {
+            .filter(|neighbor| neighbor != &src)
+            .enumerate()
+            .map(|(i, neighbor)| Message {
                 src: self.id.clone(),
                 dest: neighbor,
                 body: PeerMessage {
                     src: id,
                     dest: None,
+                    id: i,
                     body: PeerRequest::Broadcast {
                         message: message.clone(),
                     },

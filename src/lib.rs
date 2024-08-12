@@ -102,10 +102,14 @@ async fn handle_input<N, F, Fut, M, P, R>(
             });
         }
         MessageType::Response(message) => {
-            let Some(tx) = connections.get(&message.body.dest.unwrap()) else {
+            let id = message.body.dest.unwrap();
+            let Some(tx) = connections.get(&id) else {
                 return;
             };
-            tx.send(message).unwrap();
+            if tx.send(message).is_err() {
+                dbg!("connection lost", &id);
+                connections.remove(&id);
+            }
         }
     }
 }
