@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message<T> {
-    src: String,
-    dest: String,
-    body: T,
+    pub src: String,
+    pub dest: String,
+    pub body: T,
 }
 
 #[derive(Debug, Deserialize)]
@@ -16,6 +16,8 @@ pub enum InitRequest {
         node_ids: Vec<String>,
     },
 }
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum InitResponse {
     InitOk { in_reply_to: usize },
 }
