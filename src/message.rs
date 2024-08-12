@@ -32,7 +32,7 @@ impl<T> Message<T>
 where
     T: Serialize,
 {
-    pub fn send<W>(&self, mut writer: &mut W)
+    pub fn send<W>(&self, mut writer: W)
     where
         W: std::io::Write,
     {
@@ -56,10 +56,10 @@ pub enum Request<M, P> {
     Peer(Message<PeerMessage<P>>)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PeerMessage<T> {
     pub src: usize,
-    pub dest: usize,
+    pub dest: Option<usize>,
     pub body: T
 }
 

@@ -103,7 +103,7 @@ async fn handle_input<N, F, Fut, M, P, R>(
             });
         }
         MessageType::Response(message) => {
-            let Some(tx) = connections.get(&message.body.dest) else {
+            let Some(tx) = connections.get(&message.body.dest.unwrap()) else {
                 return;
             };
             tx.send(message).unwrap();
