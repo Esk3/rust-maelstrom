@@ -1,6 +1,7 @@
+use core::panic;
 use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
 use serde::de::DeserializeOwned;
-use std::{collections::HashMap, fmt::Debug, future::Future};
+use std::{collections::HashMap, fmt::Debug, future::Future, process::Output};
 use tokio::io::AsyncBufReadExt;
 
 pub mod message;
@@ -142,7 +143,7 @@ use std::{
 async fn handler_test() {
     let mut handler = Handler {
         maelstrom_handler: MaelstromHandler,
-        peer_handler: MaelstromHandler,
+        peer_handler: PeerHandler,
     };
     let node = GNode {
         id: "test_node".to_string(),
@@ -156,14 +157,16 @@ async fn handler_test() {
         input: tokio::sync::mpsc::unbounded_channel().1,
     };
     let response = handler.call(request).await;
-    assert!(matches!(response, Ok(MaelstromResponse::ReadOk(value)) if value == 0));
+    assert!(
+        matches!(response, Ok(Message{body: HandlerResponse::Maelstrom(MaelstromResponse::ReadOk(value)), ..}) if value == 0)
+    );
 }
 
 #[tokio::test]
 async fn add_test() {
     let mut handler = Handler {
         maelstrom_handler: MaelstromHandler,
-        peer_handler: MaelstromHandler,
+        peer_handler: PeerHandler,
     };
     let node = GNode {
         id: "Test node".to_string(),
@@ -225,30 +228,53 @@ where
 impl<M, P> Service<HandlerRequest> for Handler<M, P>
 where
     M: Service<RequestArgs, Response = MaelstromResponse> + Clone + 'static,
-    P: Service<RequestArgs, Response = MaelstromResponse> + Clone + 'static,
+    P: Service<RequestArgs, Response = PeerResponse> + Clone + 'static,
 {
-    type Response = MaelstromResponse;
-    type Future = M::Future;
+    type Response = Message<HandlerResponse<MaelstromResponse, PeerResponse>>;
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
     fn call(&mut self, request: HandlerRequest) -> Self::Future {
-        let mut this = self.clone();
-        self.peer_handler.call(todo!());
-        self.maelstrom_handler.call(todo!());
-        todo!()
-
-        // Box::pin(async move {
-        //     match request.request {
-        //         RequestType::MaelstromRequest(req) => this.maelstrom_handler.call(RequestArgs {
-        //             request: req,
-        //             node: request.node,
-        //             id: request.id,
-        //             input: request.input,
-        //         }),
-        //         RequestType::PeerRequest(_) => todo!(),
-        //     }
-        //     .await
+        let RequestType::MaelstromRequest(req) = request.request else {
+            panic!();
+        };
+        let mut f = self.maelstrom_handler.clone();
+        Box::pin(async move {
+            let res = f
+                .call(RequestArgs {
+                    request: req,
+                    node: request.node,
+                    id: request.id,
+                    input: request.input,
+                })
+                .await;
+            Ok(Message {
+                src: "odo".to_string(),
+                dest: "todo".to_string(),
+                body: HandlerResponse::Maelstrom(res.unwrap()),
+            })
+        })
+        // Box::pin(self.peer_handler.call(todo!()))
+        //
+        // Box::pin(match request.request {
+        //     RequestType::MaelstromRequest(req) => self.maelstrom_handler.call(RequestArgs {
+        //         request: req,
+        //         node: request.node,
+        //         id: request.id,
+        //         input: request.input,
+        //     }),
+        //     RequestType::PeerRequest(req) => self.peer_handler.call(RequestArgs {
+        //         request: req,
+        //         node: request.node,
+        //         id: request.id,
+        //         input: request.input,
+        //     }),
         // })
     }
+}
+
+enum HandlerResponse<M, P> {
+    Maelstrom(M),
+    Peer(P),
 }
 
 #[derive(Clone)]
@@ -275,7 +301,7 @@ impl Service<RequestArgs> for MaelstromHandler {
 #[derive(Clone)]
 struct PeerHandler;
 impl Service<RequestArgs> for PeerHandler {
-    type Response = ();
+    type Response = PeerResponse;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
@@ -315,3 +341,5 @@ enum MaelstromResponse {
     AddOk,
     ReadOk(usize),
 }
+
+enum PeerResponse {}
