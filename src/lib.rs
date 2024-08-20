@@ -64,6 +64,28 @@ where
         }
     }
 }
+
+pub async fn main_service_loop<H, P, N>(maelstrom_handler: H, peer_handler: P)
+where
+    H: Service<RequestArgs<N>, Response = MaelstromResponse> + Clone + 'static,
+    P: Service<RequestArgs<N>, Response = PeerResponse> + Clone + 'static,
+    N: Node + 'static,
+{
+    let mut handler = Handler {
+        maelstrom_handler,
+        peer_handler,
+    };
+    let node = N::init("first".to_string(), Vec::new());
+    let input = HandlerRequest {
+        request: RequestType::MaelstromRequest(MaelstromRequest::Read),
+        node: Arc::new(Mutex::new(node)),
+        id: 1,
+        input: tokio::sync::mpsc::unbounded_channel().1,
+    };
+    let res = handler.call(input).await;
+    dbg!(res);
+}
+
 struct InputHandler;
 impl Service<String> for InputHandler {
     type Response = InputResponse;
@@ -139,101 +161,28 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[tokio::test]
-async fn handler_test() {
-    let mut handler = Handler {
-        maelstrom_handler: MaelstromHandler,
-        peer_handler: PeerHandler,
-    };
-    let node = GNode {
-        id: "test_node".to_string(),
-        count: 0,
-    };
-    let node = Arc::new(Mutex::new(node));
-    let request = HandlerRequest {
-        request: RequestType::MaelstromRequest(MaelstromRequest::Read),
-        node: node.clone(),
-        id: 1,
-        input: tokio::sync::mpsc::unbounded_channel().1,
-    };
-    let response = handler.call(request).await;
-    assert!(
-        matches!(response, Ok(Message{body: HandlerResponse::Maelstrom(MaelstromResponse::ReadOk(value)), ..}) if value == 0)
-    );
-}
-
-#[tokio::test]
-async fn add_test() {
-    let mut handler = Handler {
-        maelstrom_handler: MaelstromHandler,
-        peer_handler: PeerHandler,
-    };
-    let node = GNode {
-        id: "Test node".to_string(),
-        count: 0,
-    };
-    let node = Arc::new(Mutex::new(node));
-    let num = 2;
-    let request = HandlerRequest {
-        request: RequestType::MaelstromRequest(MaelstromRequest::Add(num)),
-        node: node.clone(),
-        id: 1,
-        input: tokio::sync::mpsc::unbounded_channel().1,
-    };
-    let response = handler.call(request).await;
-    assert!(response.is_ok());
-    assert_eq!(node.lock().unwrap().count, num);
-}
-
-struct GNode {
-    id: String,
-    count: usize,
-}
-
-impl Node for GNode {
-    fn init(node_id: String, node_ids: Vec<String>) -> Self {
-        Self {
-            id: node_id,
-            count: 0,
-        }
-    }
-}
-
-impl GNode {
-    fn add(&mut self, value: usize) {
-        self.count += value;
-    }
-    fn read(&self) -> usize {
-        self.count
-    }
-}
-
-trait Service<Request> {
+pub trait Service<Request> {
     type Response;
     type Future: Future<Output = anyhow::Result<Self::Response>>;
 
     fn call(&mut self, request: Request) -> Self::Future;
 }
 
-#[derive(Clone)]
-struct Handler<M, P>
-where
-    M: Clone,
-    P: Clone,
-{
-    maelstrom_handler: M,
-    peer_handler: P,
+pub struct Handler<M, P> {
+    pub maelstrom_handler: M,
+    pub peer_handler: P,
 }
 
-impl<M, P> Service<HandlerRequest> for Handler<M, P>
+impl<M, P, N> Service<HandlerRequest<N>> for Handler<M, P>
 where
-    M: Service<RequestArgs, Response = MaelstromResponse> + Clone + 'static,
-    P: Service<RequestArgs, Response = PeerResponse> + Clone + 'static,
+    M: Service<RequestArgs<N>, Response = MaelstromResponse> + Clone + 'static,
+    P: Service<RequestArgs<N>, Response = PeerResponse> + Clone + 'static,
+    N: 'static,
 {
     type Response = Message<HandlerResponse<MaelstromResponse, PeerResponse>>;
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
-    fn call(&mut self, request: HandlerRequest) -> Self::Future {
+    fn call(&mut self, request: HandlerRequest<N>) -> Self::Future {
         let RequestType::MaelstromRequest(req) = request.request else {
             panic!();
         };
@@ -253,93 +202,44 @@ where
                 body: HandlerResponse::Maelstrom(res.unwrap()),
             })
         })
-        // Box::pin(self.peer_handler.call(todo!()))
-        //
-        // Box::pin(match request.request {
-        //     RequestType::MaelstromRequest(req) => self.maelstrom_handler.call(RequestArgs {
-        //         request: req,
-        //         node: request.node,
-        //         id: request.id,
-        //         input: request.input,
-        //     }),
-        //     RequestType::PeerRequest(req) => self.peer_handler.call(RequestArgs {
-        //         request: req,
-        //         node: request.node,
-        //         id: request.id,
-        //         input: request.input,
-        //     }),
-        // })
     }
 }
 
-enum HandlerResponse<M, P> {
+#[derive(Debug)]
+pub enum HandlerResponse<M, P> {
     Maelstrom(M),
     Peer(P),
 }
 
-#[derive(Clone)]
-struct MaelstromHandler;
-impl Service<RequestArgs> for MaelstromHandler {
-    type Response = MaelstromResponse;
-
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
-    fn call(&mut self, request: RequestArgs) -> Self::Future {
-        match request.request {
-            MaelstromRequest::Add(value) => Box::pin(async move {
-                let mut node = request.node.lock().unwrap();
-                node.add(value);
-                Ok(MaelstromResponse::AddOk)
-            }),
-            MaelstromRequest::Read => Box::pin(async move {
-                let node = request.node.lock().unwrap();
-                Ok(MaelstromResponse::ReadOk(node.read()))
-            }),
-        }
-    }
+pub struct RequestArgs<N> {
+    pub request: MaelstromRequest,
+    pub node: Arc<Mutex<N>>,
+    pub id: usize,
+    pub input: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
-#[derive(Clone)]
-struct PeerHandler;
-impl Service<RequestArgs> for PeerHandler {
-    type Response = PeerResponse;
-
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
-
-    fn call(&mut self, request: RequestArgs) -> Self::Future {
-        match request.request {
-            MaelstromRequest::Add(_) => todo!(),
-            MaelstromRequest::Read => todo!(),
-        }
-    }
+pub struct HandlerRequest<N> {
+    pub request: RequestType,
+    pub node: Arc<Mutex<N>>,
+    pub id: usize,
+    pub input: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
-struct RequestArgs {
-    request: MaelstromRequest,
-    node: Arc<Mutex<GNode>>,
-    id: usize,
-    input: tokio::sync::mpsc::UnboundedReceiver<()>,
-}
-
-struct HandlerRequest {
-    request: RequestType,
-    node: Arc<Mutex<GNode>>,
-    id: usize,
-    input: tokio::sync::mpsc::UnboundedReceiver<()>,
-}
-
-enum RequestType {
+pub enum RequestType {
     MaelstromRequest(MaelstromRequest),
     PeerRequest(MaelstromRequest),
 }
-enum MaelstromRequest {
+
+pub enum MaelstromRequest {
     Add(usize),
     Read,
 }
 
 #[derive(Debug)]
-enum MaelstromResponse {
+pub enum MaelstromResponse {
     AddOk,
     ReadOk(usize),
 }
 
-enum PeerResponse {}
+#[derive(Debug)]
+pub enum PeerResponse {}
