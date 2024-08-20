@@ -1,10 +1,14 @@
 use std::{
     future::Future,
+    io::stdin,
     pin::Pin,
     sync::{Arc, Mutex},
 };
 
-use rust_maelstrom::{message::Message, Handler, HandlerRequest, HandlerResponse, MaelstromRequest, MaelstromResponse, Node, PeerResponse, RequestArgs, RequestType, Service};
+use rust_maelstrom::{
+    message::Message, Handler, HandlerRequest, HandlerResponse, MaelstromRequest,
+    MaelstromResponse, Node, PeerResponse, RequestArgs, RequestType, Service,
+};
 
 fn main() {}
 
@@ -36,7 +40,6 @@ impl GNode {
         self.count
     }
 }
-
 
 #[derive(Clone)]
 struct MaelstromHandler;
@@ -73,7 +76,6 @@ impl<N> Service<RequestArgs<N>> for PeerHandler {
         }
     }
 }
-
 
 #[tokio::test]
 async fn handler_test() {
@@ -120,4 +122,3 @@ async fn add_test() {
     assert!(response.is_ok());
     assert_eq!(node.lock().unwrap().count, num);
 }
-

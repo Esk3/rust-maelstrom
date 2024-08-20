@@ -71,14 +71,40 @@ where
     P: Service<RequestArgs<N>, Response = PeerResponse> + Clone + 'static,
     N: Node + 'static,
 {
+    let stdin = tokio::io::stdin();
+    let test = r#"{"src": "a", "dest": "b", "body": {"type": "init", "msg_id": 1, "node_id": "nnnn1", "node_ids": ["nnnn1"]}}"#;
+    let test = std::io::Cursor::new(test);
+    let mut lines = tokio::io::BufReader::new(test).lines();
+
+    let init_line = lines.next_line().await.unwrap().unwrap();
+    let init_message: Message<InitRequest> = serde_json::from_str(&init_line).unwrap();
+    let (reply, body) = init_message.into_reply();
+    let InitRequest::Init {
+        msg_id,
+        node_id,
+        node_ids,
+    } = body;
+
+    let node = N::init(node_id, node_ids);
+    let node = std::sync::Arc::new(std::sync::Mutex::new(node));
+
+    {
+        let mut output = std::io::stdout().lock();
+        reply
+            .with_body(InitResponse::InitOk {
+                in_reply_to: msg_id,
+            })
+            .send(&mut output);
+    }
+
     let mut handler = Handler {
         maelstrom_handler,
         peer_handler,
     };
-    let node = N::init("first".to_string(), Vec::new());
+
     let input = HandlerRequest {
         request: RequestType::MaelstromRequest(MaelstromRequest::Read),
-        node: Arc::new(Mutex::new(node)),
+        node: node.clone(),
         id: 1,
         input: tokio::sync::mpsc::unbounded_channel().1,
     };
