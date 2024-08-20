@@ -142,7 +142,7 @@ use std::{
 async fn handler_test() {
     let mut handler = Handler {
         maelstrom_handler: MaelstromHandler,
-        peer_handler: todo!(),
+        peer_handler: MaelstromHandler,
     };
     let node = GNode {
         id: "test_node".to_string(),
@@ -163,7 +163,7 @@ async fn handler_test() {
 async fn add_test() {
     let mut handler = Handler {
         maelstrom_handler: MaelstromHandler,
-        peer_handler: todo!(),
+        peer_handler: MaelstromHandler,
     };
     let node = GNode {
         id: "Test node".to_string(),
@@ -225,25 +225,29 @@ where
 impl<M, P> Service<HandlerRequest> for Handler<M, P>
 where
     M: Service<RequestArgs, Response = MaelstromResponse> + Clone + 'static,
-    P: Clone,
+    P: Service<RequestArgs, Response = MaelstromResponse> + Clone + 'static,
 {
     type Response = MaelstromResponse;
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+    type Future = M::Future;
 
     fn call(&mut self, request: HandlerRequest) -> Self::Future {
         let mut this = self.clone();
-        Box::pin(async move {
-            match request.request {
-                RequestType::MaelstromRequest(req) => this.maelstrom_handler.call(RequestArgs {
-                    request: req,
-                    node: request.node,
-                    id: request.id,
-                    input: request.input,
-                }),
-                RequestType::PeerRequest(_) => todo!(),
-            }
-            .await
-        })
+        self.peer_handler.call(todo!());
+        self.maelstrom_handler.call(todo!());
+        todo!()
+
+        // Box::pin(async move {
+        //     match request.request {
+        //         RequestType::MaelstromRequest(req) => this.maelstrom_handler.call(RequestArgs {
+        //             request: req,
+        //             node: request.node,
+        //             id: request.id,
+        //             input: request.input,
+        //         }),
+        //         RequestType::PeerRequest(_) => todo!(),
+        //     }
+        //     .await
+        // })
     }
 }
 
