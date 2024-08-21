@@ -68,7 +68,9 @@ where
 pub async fn main_service_loop<H, P, N, Req, Res>(mut handler: Handler<H, P>)
 where
     H: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
-    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = Res> + Clone + 'static,
+    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = PeerMessage<Res>>
+        + Clone
+        + 'static,
     N: Node + 'static,
     Req: DeserializeOwned + 'static,
     Res: Serialize + Debug,
@@ -199,32 +201,65 @@ pub struct Handler<M, P> {
     pub peer_handler: P,
 }
 
-impl<M> Handler<M, PHander> {
-    pub fn new(handler: M) -> Self {
+impl<M> Handler<M, PHander<M>> {
+    pub fn new(handler: M) -> Self
+    where
+        M: Clone,
+    {
         Self {
-            maelstrom_handler: handler,
-            peer_handler: PHander,
+            maelstrom_handler: handler.clone(),
+            peer_handler: PHander { inner: handler },
         }
     }
 }
 
-struct PHander;
-impl<Req> Service<Message<PeerMessage<Req>>> for PHander {
-    type Response = ();
+#[derive(Clone)]
+pub struct PHander<S> {
+    pub inner: S,
+}
+impl<Req, N, S, Res> Service<RequestArgs<Message<PeerMessage<Req>>, N>> for PHander<S>
+where
+    S: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
+    N: 'static,
+    Req: 'static,
+{
+    type Response = PeerMessage<Res>;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
-    fn call(&mut self, request: Message<PeerMessage<Req>>) -> Self::Future {
-        let (message, peer_message) = request.split();
+    fn call(
+        &mut self,
+        RequestArgs {
+            request: request_1,
+            node,
+            id,
+            input,
+        }: RequestArgs<message::Message<PeerMessage<Req>>, N>,
+    ) -> Self::Future {
+        let mut this = self.clone();
+        let (message, peer_message) = request_1.split();
         let (peer_message, body) = peer_message.split();
-        todo!()
+        Box::pin(async move {
+            let response = this
+                .inner
+                .call(RequestArgs {
+                    request: message.with_body(body),
+                    node,
+                    id,
+                    input,
+                })
+                .await;
+            Ok(todo!())
+        })
     }
 }
 
 impl<M, P, N, Req, Res> Service<HandlerRequest<Req, N>> for Handler<M, P>
 where
     M: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
-    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = Res> + Clone + 'static,
+    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = PeerMessage<Res>>
+        + Clone
+        + 'static,
     N: 'static,
     Req: 'static,
     Res: Serialize,

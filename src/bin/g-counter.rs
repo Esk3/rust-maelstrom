@@ -69,33 +69,20 @@ impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GNode>> for Maelstro
     }
 }
 
-#[derive(Clone)]
-struct PeerHandler;
-impl<N> Service<RequestArgs<GRequest, N>> for PeerHandler {
-    type Response = GResponse;
-
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
-
-    fn call(&mut self, request: RequestArgs<GRequest, N>) -> Self::Future {
-        match request.request {
-            _ => todo!(),
-        }
-    }
-}
-
 #[tokio::test]
 async fn handler_test() {
-    let mut handler = Handler {
-        maelstrom_handler: MaelstromHandler,
-        peer_handler: PeerHandler,
-    };
+    let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
         id: "test_node".to_string(),
         count: 0,
     };
     let node = Arc::new(Mutex::new(node));
     let request = HandlerRequest {
-        request: GRequest::Read { msg_id: 1 },
+        request: RequestType::Maelstrom(Message {
+            src: "test_src".to_string(),
+            dest: "test dest".to_string(),
+            body: GRequest::Read { msg_id: 1 },
+        }),
         node: node.clone(),
         id: 1,
         input: tokio::sync::mpsc::unbounded_channel().1,
@@ -106,10 +93,7 @@ async fn handler_test() {
 
 #[tokio::test]
 async fn add_test() {
-    let mut handler = Handler {
-        maelstrom_handler: MaelstromHandler,
-        peer_handler: PeerHandler,
-    };
+    let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
         id: "Test node".to_string(),
         count: 0,
@@ -117,7 +101,11 @@ async fn add_test() {
     let node = Arc::new(Mutex::new(node));
     let num = 2;
     let request = HandlerRequest {
-        request: GRequest::Read { msg_id: 1 },
+        request: RequestType::Maelstrom(Message {
+            src: "testing src".to_string(),
+            dest: "testing dest".to_string(),
+            body: GRequest::Read { msg_id: 1 },
+        }),
         node: node.clone(),
         id: 1,
         input: tokio::sync::mpsc::unbounded_channel().1,
