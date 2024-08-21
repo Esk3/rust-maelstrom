@@ -11,7 +11,10 @@ use rust_maelstrom::{
 };
 use serde::{Deserialize, Serialize};
 
-fn main() {}
+#[tokio::main]
+async fn main() {
+    rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
+}
 
 // #[tokio::test]
 // async fn test() {

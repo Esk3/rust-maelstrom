@@ -1,7 +1,7 @@
 use core::panic;
 use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Debug, future::Future, process::Output};
+use std::{collections::HashMap, fmt::Debug, future::Future, io::stdout, process::Output};
 use tokio::io::AsyncBufReadExt;
 
 pub mod message;
@@ -76,9 +76,9 @@ where
     Res: Serialize + Debug,
 {
     let stdin = tokio::io::stdin();
-    let test = r#"{"src": "a", "dest": "b", "body": {"type": "init", "msg_id": 1, "node_id": "nnnn1", "node_ids": ["nnnn1"]}}"#;
-    let test = std::io::Cursor::new(test);
-    let mut lines = tokio::io::BufReader::new(test).lines();
+    // let test = r#"{"src": "a", "dest": "b", "body": {"type": "init", "msg_id": 1, "node_id": "nnnn1", "node_ids": ["nnnn1"]}}"#;
+    // let test = std::io::Cursor::new(test);
+    let mut lines = tokio::io::BufReader::new(stdin).lines();
 
     let init_line = lines.next_line().await.unwrap().unwrap();
     let init_message: Message<InitRequest> = serde_json::from_str(&init_line).unwrap();
@@ -101,16 +101,22 @@ where
             .send(&mut output);
     }
 
-    let req = lines.next_line().await.unwrap().unwrap();
-    let req = serde_json::from_str(&req).unwrap();
-    let req = HandlerRequest {
-        request: req,
-        node: node.clone(),
-        id: 1,
-        input: tokio::sync::mpsc::unbounded_channel().1,
+    let mut out = stdout().lock();
+    let mut id = 0;
+    for line in lines.next_line().await {
+        let line = line.unwrap();
+        id += 1;
+        let request = serde_json::from_str(&line).unwrap();
+        let handler_request = HandlerRequest {
+            request,
+            node: node.clone(),
+            id,
+            input: tokio::sync::mpsc::unbounded_channel().1,
+        };
+        let response: Message<String> = handler.call(handler_request).await.unwrap();
+        response.send(&mut out);
     };
-    let res = handler.call(req).await;
-    dbg!(res);
+
 }
 
 struct InputHandler;
