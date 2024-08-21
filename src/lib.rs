@@ -1,6 +1,6 @@
 use core::panic;
 use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, future::Future, process::Output};
 use tokio::io::AsyncBufReadExt;
 
@@ -65,11 +65,13 @@ where
     }
 }
 
-pub async fn main_service_loop<H, P, N>(maelstrom_handler: H, peer_handler: P)
+pub async fn main_service_loop<H, P, N, Req, Res>(mut handler: Handler<H, P>)
 where
-    H: Service<RequestArgs<N>, Response = MaelstromResponse> + Clone + 'static,
-    P: Service<RequestArgs<N>, Response = PeerResponse> + Clone + 'static,
+    H: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
+    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = Res> + Clone + 'static,
     N: Node + 'static,
+    Req: DeserializeOwned + 'static,
+    Res: Serialize + Debug,
 {
     let stdin = tokio::io::stdin();
     let test = r#"{"src": "a", "dest": "b", "body": {"type": "init", "msg_id": 1, "node_id": "nnnn1", "node_ids": ["nnnn1"]}}"#;
@@ -97,18 +99,15 @@ where
             .send(&mut output);
     }
 
-    let mut handler = Handler {
-        maelstrom_handler,
-        peer_handler,
-    };
-
-    let input = HandlerRequest {
-        request: RequestType::MaelstromRequest(MaelstromRequest::Read),
+    let req = lines.next_line().await.unwrap().unwrap();
+    let req = serde_json::from_str(&req).unwrap();
+    let req = HandlerRequest {
+        request: req,
         node: node.clone(),
         id: 1,
         input: tokio::sync::mpsc::unbounded_channel().1,
     };
-    let res = handler.call(input).await;
+    let res = handler.call(req).await;
     dbg!(res);
 }
 
@@ -194,40 +193,81 @@ pub trait Service<Request> {
     fn call(&mut self, request: Request) -> Self::Future;
 }
 
+#[derive(Clone)]
 pub struct Handler<M, P> {
     pub maelstrom_handler: M,
     pub peer_handler: P,
 }
 
-impl<M, P, N> Service<HandlerRequest<N>> for Handler<M, P>
-where
-    M: Service<RequestArgs<N>, Response = MaelstromResponse> + Clone + 'static,
-    P: Service<RequestArgs<N>, Response = PeerResponse> + Clone + 'static,
-    N: 'static,
-{
-    type Response = Message<HandlerResponse<MaelstromResponse, PeerResponse>>;
+impl<M> Handler<M, PHander> {
+    pub fn new(handler: M) -> Self {
+        Self {
+            maelstrom_handler: handler,
+            peer_handler: PHander,
+        }
+    }
+}
+
+struct PHander;
+impl<Req> Service<Message<PeerMessage<Req>>> for PHander {
+    type Response = ();
+
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
-    fn call(&mut self, request: HandlerRequest<N>) -> Self::Future {
-        let RequestType::MaelstromRequest(req) = request.request else {
-            panic!();
-        };
-        let mut f = self.maelstrom_handler.clone();
-        Box::pin(async move {
-            let res = f
-                .call(RequestArgs {
-                    request: req,
-                    node: request.node,
-                    id: request.id,
-                    input: request.input,
+    fn call(&mut self, request: Message<PeerMessage<Req>>) -> Self::Future {
+        let (message, peer_message) = request.split();
+        let (peer_message, body) = peer_message.split();
+        todo!()
+    }
+}
+
+impl<M, P, N, Req, Res> Service<HandlerRequest<Req, N>> for Handler<M, P>
+where
+    M: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
+    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = Res> + Clone + 'static,
+    N: 'static,
+    Req: 'static,
+    Res: Serialize,
+{
+    type Response = Message<String>;
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+
+    fn call(&mut self, request: HandlerRequest<Req, N>) -> Self::Future {
+        let mut this = self.clone();
+        match request.request {
+            RequestType::Maelstrom(_) => Box::pin(async move {
+                let body = this
+                    .maelstrom_handler
+                    .call(RequestArgs {
+                        request: todo!(),
+                        node: todo!(),
+                        id: todo!(),
+                        input: todo!(),
+                    })
+                    .await;
+                Ok(Message {
+                    src: todo!(),
+                    dest: todo!(),
+                    body: serde_json::to_string(&body.unwrap()).unwrap(),
                 })
-                .await;
-            Ok(Message {
-                src: "odo".to_string(),
-                dest: "todo".to_string(),
-                body: HandlerResponse::Maelstrom(res.unwrap()),
-            })
-        })
+            }),
+            RequestType::Peer(req) => Box::pin(async move {
+                let body = this
+                    .peer_handler
+                    .call(RequestArgs {
+                        request: req,
+                        node: todo!(),
+                        id: todo!(),
+                        input: todo!(),
+                    })
+                    .await;
+                Ok(Message {
+                    src: todo!(),
+                    dest: todo!(),
+                    body: serde_json::to_string(&body.unwrap()).unwrap(),
+                })
+            }),
+        }
     }
 }
 
@@ -237,23 +277,25 @@ pub enum HandlerResponse<M, P> {
     Peer(P),
 }
 
-pub struct RequestArgs<N> {
-    pub request: MaelstromRequest,
+pub struct RequestArgs<Req, N> {
+    pub request: Req,
     pub node: Arc<Mutex<N>>,
     pub id: usize,
     pub input: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
-pub struct HandlerRequest<N> {
-    pub request: RequestType,
+pub struct HandlerRequest<Req, N> {
+    pub request: RequestType<Req>,
     pub node: Arc<Mutex<N>>,
     pub id: usize,
     pub input: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
-pub enum RequestType {
-    MaelstromRequest(MaelstromRequest),
-    PeerRequest(MaelstromRequest),
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum RequestType<Req> {
+    Maelstrom(Message<Req>),
+    Peer(Message<PeerMessage<Req>>),
 }
 
 pub enum MaelstromRequest {

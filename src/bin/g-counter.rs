@@ -9,12 +9,13 @@ use rust_maelstrom::{
     message::Message, Handler, HandlerRequest, HandlerResponse, MaelstromRequest,
     MaelstromResponse, Node, PeerResponse, RequestArgs, RequestType, Service,
 };
+use serde::{Deserialize, Serialize};
 
 fn main() {}
 
 #[tokio::test]
 async fn test() {
-    rust_maelstrom::main_service_loop(MaelstromHandler, PeerHandler).await;
+    rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
     todo!()
 }
 
@@ -43,20 +44,26 @@ impl GNode {
 
 #[derive(Clone)]
 struct MaelstromHandler;
-impl Service<rust_maelstrom::RequestArgs<GNode>> for MaelstromHandler {
-    type Response = MaelstromResponse;
+impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GNode>> for MaelstromHandler {
+    type Response = GResponse;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
-    fn call(&mut self, request: RequestArgs<GNode>) -> Self::Future {
-        match request.request {
-            MaelstromRequest::Add(value) => Box::pin(async move {
+    fn call(&mut self, request: RequestArgs<Message<GRequest>, GNode>) -> Self::Future {
+        match request.request.body {
+            GRequest::Add { delta, msg_id } => Box::pin(async move {
                 let mut node = request.node.lock().unwrap();
-                node.add(value);
-                Ok(MaelstromResponse::AddOk)
+                node.add(delta);
+                Ok(GResponse::AddOk {
+                    in_reply_to: msg_id,
+                })
             }),
-            MaelstromRequest::Read => Box::pin(async move {
+            GRequest::Read { msg_id } => Box::pin(async move {
                 let node = request.node.lock().unwrap();
-                Ok(MaelstromResponse::ReadOk(node.read()))
+                let value = node.read();
+                Ok(GResponse::ReadOk {
+                    value,
+                    in_reply_to: msg_id,
+                })
             }),
         }
     }
@@ -64,15 +71,14 @@ impl Service<rust_maelstrom::RequestArgs<GNode>> for MaelstromHandler {
 
 #[derive(Clone)]
 struct PeerHandler;
-impl<N> Service<RequestArgs<N>> for PeerHandler {
-    type Response = PeerResponse;
+impl<N> Service<RequestArgs<GRequest, N>> for PeerHandler {
+    type Response = GResponse;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
-    fn call(&mut self, request: RequestArgs<N>) -> Self::Future {
+    fn call(&mut self, request: RequestArgs<GRequest, N>) -> Self::Future {
         match request.request {
-            MaelstromRequest::Add(_) => todo!(),
-            MaelstromRequest::Read => todo!(),
+            _ => todo!(),
         }
     }
 }
@@ -89,15 +95,13 @@ async fn handler_test() {
     };
     let node = Arc::new(Mutex::new(node));
     let request = HandlerRequest {
-        request: RequestType::MaelstromRequest(MaelstromRequest::Read),
+        request: GRequest::Read { msg_id: 1 },
         node: node.clone(),
         id: 1,
         input: tokio::sync::mpsc::unbounded_channel().1,
     };
     let response = handler.call(request).await;
-    assert!(
-        matches!(response, Ok(Message{body: HandlerResponse::Maelstrom(MaelstromResponse::ReadOk(value)), ..}) if value == 0)
-    );
+    assert!(matches!(response, Ok(Message { body: MyRes, .. })));
 }
 
 #[tokio::test]
@@ -113,7 +117,7 @@ async fn add_test() {
     let node = Arc::new(Mutex::new(node));
     let num = 2;
     let request = HandlerRequest {
-        request: RequestType::MaelstromRequest(MaelstromRequest::Add(num)),
+        request: GRequest::Read { msg_id: 1 },
         node: node.clone(),
         id: 1,
         input: tokio::sync::mpsc::unbounded_channel().1,
@@ -121,4 +125,17 @@ async fn add_test() {
     let response = handler.call(request).await;
     assert!(response.is_ok());
     assert_eq!(node.lock().unwrap().count, num);
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum GRequest {
+    Add { delta: usize, msg_id: usize },
+    Read { msg_id: usize },
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum GResponse {
+    AddOk { in_reply_to: usize },
+    ReadOk { value: usize, in_reply_to: usize },
 }

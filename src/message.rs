@@ -8,6 +8,16 @@ pub struct Message<T> {
 }
 
 impl<T> Message<T> {
+    pub fn split(self) -> (Message<()>, T) {
+        (
+            Message {
+                src: self.src,
+                dest: self.dest,
+                body: (),
+            },
+            self.body,
+        )
+    }
     pub fn into_reply(self) -> (Message<()>, T) {
         let body = self.body;
         (
@@ -64,6 +74,17 @@ pub struct PeerMessage<T> {
 }
 
 impl<T> PeerMessage<T> {
+    pub fn split(self) -> (PeerMessage<()>, T) {
+        (
+            PeerMessage {
+                src: self.src,
+                dest: self.dest,
+                id: self.id,
+                body: (),
+            },
+            self.body,
+        )
+    }
     pub fn into_reply(self, src: usize) -> (PeerMessage<()>, T) {
         let body = self.body;
         (
