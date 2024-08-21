@@ -13,12 +13,13 @@ use serde::{Deserialize, Serialize};
 
 fn main() {}
 
-#[tokio::test]
-async fn test() {
-    rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
-    todo!()
-}
+// #[tokio::test]
+// async fn test() {
+//     rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
+//     todo!()
+// }
 
+#[derive(Debug)]
 struct GNode {
     id: String,
     count: usize,
@@ -104,7 +105,10 @@ async fn add_test() {
         request: RequestType::Maelstrom(Message {
             src: "testing src".to_string(),
             dest: "testing dest".to_string(),
-            body: GRequest::Read { msg_id: 1 },
+            body: GRequest::Add {
+                delta: num,
+                msg_id: 1,
+            },
         }),
         node: node.clone(),
         id: 1,
@@ -112,6 +116,21 @@ async fn add_test() {
     };
     let response = handler.call(request).await;
     assert!(response.is_ok());
+    dbg!(response);
+
+    let request = HandlerRequest {
+        request: RequestType::Maelstrom(Message {
+            src: "testing src".to_string(),
+            dest: "testing destl".to_string(),
+            body: GRequest::Read { msg_id: 2 },
+        }),
+        node: node.clone(),
+        id: 2,
+        input: tokio::sync::mpsc::unbounded_channel().1,
+    };
+    let response = handler.call(request).await;
+    dbg!(response);
+    dbg!(&node);
     assert_eq!(node.lock().unwrap().count, num);
 }
 

@@ -270,19 +270,20 @@ where
     fn call(&mut self, request: HandlerRequest<Req, N>) -> Self::Future {
         let mut this = self.clone();
         match request.request {
-            RequestType::Maelstrom(_) => Box::pin(async move {
+            RequestType::Maelstrom(msg) => Box::pin(async move {
+                let (src, dest) = (msg.src.clone(), msg.dest.clone());
                 let body = this
                     .maelstrom_handler
                     .call(RequestArgs {
-                        request: todo!(),
-                        node: todo!(),
-                        id: todo!(),
-                        input: todo!(),
+                        request: msg,
+                        node: request.node,
+                        id: request.id,
+                        input: request.input,
                     })
                     .await;
                 Ok(Message {
-                    src: todo!(),
-                    dest: todo!(),
+                    src: dest,
+                    dest: src,
                     body: serde_json::to_string(&body.unwrap()).unwrap(),
                 })
             }),
