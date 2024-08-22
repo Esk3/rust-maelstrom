@@ -1,7 +1,13 @@
 use core::panic;
 use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Debug, future::Future, io::stdout, process::Output};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    future::Future,
+    io::{stdout, Write},
+    process::Output,
+};
 use tokio::io::AsyncBufReadExt;
 
 pub mod message;
@@ -71,13 +77,11 @@ where
     P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = PeerMessage<Res>>
         + Clone
         + 'static,
-    N: Node + 'static,
+    N: Node + 'static + Debug,
     Req: DeserializeOwned + 'static,
     Res: Serialize + Debug,
 {
     let stdin = tokio::io::stdin();
-    // let test = r#"{"src": "a", "dest": "b", "body": {"type": "init", "msg_id": 1, "node_id": "nnnn1", "node_ids": ["nnnn1"]}}"#;
-    // let test = std::io::Cursor::new(test);
     let mut lines = tokio::io::BufReader::new(stdin).lines();
 
     let init_line = lines.next_line().await.unwrap().unwrap();
@@ -90,21 +94,24 @@ where
     } = body;
 
     let node = N::init(node_id, node_ids);
+    dbg!(&node);
     let node = std::sync::Arc::new(std::sync::Mutex::new(node));
 
     {
         let mut output = std::io::stdout().lock();
         reply
-            .with_body(InitResponse::InitOk {
+            .with_body(dbg!(InitResponse::InitOk {
                 in_reply_to: msg_id,
-            })
+            }))
             .send(&mut output);
+        output.flush().unwrap();
     }
 
-    let mut out = stdout().lock();
     let mut id = 0;
-    for line in lines.next_line().await {
-        let line = line.unwrap();
+    let mut stderr = std::io::stderr().lock();
+    let mut out = std::io::stdout().lock();
+    while let Ok(line) = lines.next_line().await {
+        let line = dbg!(line.unwrap());
         id += 1;
         let request = serde_json::from_str(&line).unwrap();
         let handler_request = HandlerRequest {
@@ -113,10 +120,10 @@ where
             id,
             input: tokio::sync::mpsc::unbounded_channel().1,
         };
-        let response: Message<String> = handler.call(handler_request).await.unwrap();
+        let response: Message<_> = handler.call(handler_request).await.unwrap();
+        response.send(&mut stderr);
         response.send(&mut out);
-    };
-
+    }
 }
 
 struct InputHandler;
@@ -270,7 +277,7 @@ where
     Req: 'static,
     Res: Serialize,
 {
-    type Response = Message<String>;
+    type Response = Message<HandlerResponse<Res>>;
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
     fn call(&mut self, request: HandlerRequest<Req, N>) -> Self::Future {
@@ -287,11 +294,11 @@ where
                         input: request.input,
                     })
                     .await;
-                Ok(Message {
+                Ok((Message {
                     src: dest,
                     dest: src,
-                    body: serde_json::to_string(&body.unwrap()).unwrap(),
-                })
+                    body: HandlerResponse::Maelstrom(body.unwrap()),
+                }))
             }),
             RequestType::Peer(req) => Box::pin(async move {
                 let body = this
@@ -306,17 +313,18 @@ where
                 Ok(Message {
                     src: todo!(),
                     dest: todo!(),
-                    body: serde_json::to_string(&body.unwrap()).unwrap(),
+                    body: HandlerResponse::Peer(body.unwrap()),
                 })
             }),
         }
     }
 }
 
-#[derive(Debug)]
-pub enum HandlerResponse<M, P> {
-    Maelstrom(M),
-    Peer(P),
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum HandlerResponse<Res> {
+    Maelstrom(Res),
+    Peer(PeerMessage<Res>),
 }
 
 pub struct RequestArgs<Req, N> {

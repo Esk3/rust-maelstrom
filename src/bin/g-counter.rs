@@ -16,12 +16,6 @@ async fn main() {
     rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
 }
 
-// #[tokio::test]
-// async fn test() {
-//     rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
-//     todo!()
-// }
-
 #[derive(Debug)]
 struct GNode {
     id: String,
@@ -31,7 +25,7 @@ struct GNode {
 impl Node for GNode {
     fn init(node_id: String, node_ids: Vec<String>) -> Self {
         Self {
-            id: node_id,
+            id: dbg!(node_id),
             count: 0,
         }
     }
