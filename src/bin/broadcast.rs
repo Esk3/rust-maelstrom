@@ -1,9 +1,8 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
-use anyhow::bail;
 use rust_maelstrom::{
     main_loop,
-    message::{self, send_messages_with_retry, Message, PeerMessage},
+    message::{send_messages_with_retry, Message, PeerMessage},
     service::Service,
     Node,
 };

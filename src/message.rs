@@ -2,8 +2,6 @@ use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
-use crate::RequestType;
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message<T> {
     pub src: String,
@@ -123,8 +121,7 @@ pub async fn send_messages_with_retry<T, B: Debug>(
 ) where
     T: Serialize,
 {
-    // let mut interval = tokio::time::interval(interval);
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1000));
+    let mut interval = tokio::time::interval(interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     while !messages.is_empty() {
         tokio::select! {

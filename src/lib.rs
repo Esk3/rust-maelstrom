@@ -1,13 +1,12 @@
 use handler::Handler;
 use input::{InputHandler, InputResponse};
-use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
+use message::{InitRequest, InitResponse, Message, PeerMessage};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use service::Service;
 use std::{
     collections::HashMap,
     fmt::Debug,
-    future::Future,
-    io::{stdout, Write},
+    io::Write,
     sync::{Arc, Mutex},
 };
 
@@ -17,12 +16,13 @@ pub mod input;
 pub mod message;
 pub mod service;
 
-pub async fn main_loop<H, P, N, Req, Res>(mut handler: Handler<H, P>)
+pub async fn main_loop<H, P, N, Req, Res>(handler: Handler<H, P>)
 where
     H: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
     P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
         + Clone
-        + 'static + Send,
+        + 'static
+        + Send,
     N: Node + 'static + Debug + Send,
     Req: DeserializeOwned + 'static + Debug + Send,
     Res: Serialize + DeserializeOwned + Debug + Send + 'static + Debug,
@@ -79,7 +79,7 @@ where
                         });
                     }
                     InputResponse::HandlerMessage { id, message } => if let Some(rx) = channels.get(&id) {
-                        rx.send(message);
+                        rx.send(message).unwrap();
                     } else {
                         dbg!("channel closed", id);
                     },
@@ -90,24 +90,6 @@ where
                 channels.remove(&id);
                 response.send(std::io::stdout().lock());
             }
-        }
-    }
-    while let Ok(line) = lines.next_line().await {
-        let line = dbg!(line.unwrap());
-        let input = input_handler.call(line).await.unwrap();
-        match dbg!(input) {
-            InputResponse::NewHandler(request) => {
-                id += 1;
-                let handler_request = HandlerRequest {
-                    request,
-                    node: node.clone(),
-                    id,
-                    input: tokio::sync::mpsc::unbounded_channel().1,
-                };
-                let response: Message<_> = handler.call(handler_request).await.unwrap();
-                response.send(std::io::stdout().lock());
-            }
-            InputResponse::HandlerMessage { id, message } => todo!("{message:?}"),
         }
     }
 }

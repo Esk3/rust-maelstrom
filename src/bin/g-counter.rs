@@ -1,14 +1,10 @@
-use std::{
-    future::Future,
-    io::stdin,
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::{future::Future, pin::Pin};
 
 use rust_maelstrom::{
+    handler::Handler,
     message::{Message, PeerMessage},
-    handler::Handler, HandlerRequest, HandlerResponse, MaelstromRequest, MaelstromResponse, Node,
-    PeerResponse, RequestArgs, RequestType, service::Service,
+    service::Service,
+    Node, RequestArgs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +43,9 @@ impl GNode {
 
 #[derive(Clone)]
 struct MaelstromHandler;
-impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GResponse, GNode>> for MaelstromHandler {
+impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GResponse, GNode>>
+    for MaelstromHandler
+{
     type Response = GResponse;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
@@ -90,8 +88,6 @@ impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GResponse, GNode>> f
                         })
                         .send(&mut out);
                     }
-                } else {
-                    dbg!("seen uuid", uuid);
                 }
                 Ok(GResponse::AddOk {
                     in_reply_to: msg_id,
@@ -112,6 +108,7 @@ impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GResponse, GNode>> f
 
 #[tokio::test]
 async fn handler_test() {
+    use std::sync::{Arc, Mutex};
     let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
         id: "test_node".to_string(),
@@ -120,8 +117,8 @@ async fn handler_test() {
         seen_uuids: Vec::new(),
     };
     let node = Arc::new(Mutex::new(node));
-    let request = HandlerRequest {
-        request: RequestType::Maelstrom(Message {
+    let request = rust_maelstrom::HandlerRequest {
+        request: rust_maelstrom::RequestType::Maelstrom(Message {
             src: "test_src".to_string(),
             dest: "test dest".to_string(),
             body: GRequest::Read { msg_id: 1 },
@@ -131,11 +128,12 @@ async fn handler_test() {
         input: tokio::sync::mpsc::unbounded_channel().1,
     };
     let response = handler.call(request).await;
-    assert!(matches!(response, Ok(Message { body: MyRes, .. })));
+    assert!(matches!(response, Ok(Message { body: _my_res, .. })));
 }
 
 #[tokio::test]
 async fn add_test() {
+    use std::sync::{Arc, Mutex};
     let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
         id: "Test node".to_string(),
@@ -145,8 +143,8 @@ async fn add_test() {
     };
     let node = Arc::new(Mutex::new(node));
     let num = 2;
-    let request = HandlerRequest {
-        request: RequestType::Maelstrom(Message {
+    let request = rust_maelstrom::HandlerRequest {
+        request: rust_maelstrom::RequestType::Maelstrom(Message {
             src: "testing src".to_string(),
             dest: "testing dest".to_string(),
             body: GRequest::Add {
@@ -161,10 +159,10 @@ async fn add_test() {
     };
     let response = handler.call(request).await;
     assert!(response.is_ok());
-    dbg!(response);
+    dbg!(response.unwrap());
 
-    let request = HandlerRequest {
-        request: RequestType::Maelstrom(Message {
+    let request = rust_maelstrom::HandlerRequest {
+        request: rust_maelstrom::RequestType::Maelstrom(Message {
             src: "testing src".to_string(),
             dest: "testing destl".to_string(),
             body: GRequest::Read { msg_id: 2 },
@@ -174,7 +172,7 @@ async fn add_test() {
         input: tokio::sync::mpsc::unbounded_channel().1,
     };
     let response = handler.call(request).await;
-    dbg!(response);
+    dbg!(response.unwrap());
     dbg!(&node);
     assert_eq!(node.lock().unwrap().count, num);
 }

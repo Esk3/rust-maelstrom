@@ -1,16 +1,17 @@
-use std::{collections::HashMap, fmt::Debug, future::Future, pin::Pin};
+use std::{fmt::Debug, future::Future, pin::Pin};
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize};
 
 use crate::{
-    message::{Message, MessageType, PeerMessage, Request},
+    message::{Message, PeerMessage},
     service::Service,
-    Node, RequestType,
+    RequestType,
 };
 
 pub struct InputHandler<Req, Res>(std::marker::PhantomData<Req>, std::marker::PhantomData<Res>);
 
 impl<Req, Res> InputHandler<Req, Res> {
+    #[must_use]
     pub fn new() -> Self {
         Self(std::marker::PhantomData, std::marker::PhantomData)
     }
@@ -39,7 +40,7 @@ where
                 let id = res.body.dest.unwrap();
                 Box::pin(async move { Ok(InputResponse::HandlerMessage { id, message: res }) })
             }
-       }
+        }
     }
 }
 #[derive(Deserialize)]
@@ -55,55 +56,4 @@ pub enum InputResponse<Req, Res> {
         id: usize,
         message: Message<PeerMessage<Res>>,
     },
-}
-
-fn handle_input<N, F, Fut, M, P, R>(
-    input: &str,
-    state: std::sync::Arc<std::sync::Mutex<N>>,
-    set: &mut tokio::task::JoinSet<usize>,
-    connections: &mut std::collections::HashMap<
-        usize,
-        tokio::sync::mpsc::UnboundedSender<Message<PeerMessage<R>>>,
-    >,
-    next_id: &mut usize,
-    handler: F,
-) where
-    N: Node + Send + 'static,
-    F: Fn(
-            Request<M, P>,
-            std::sync::Arc<std::sync::Mutex<N>>,
-            usize,
-            tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<R>>>,
-        ) -> Fut
-        + Send
-        + Sync
-        + 'static,
-    Fut: Future + Send + Sync,
-    M: DeserializeOwned + Debug + Send + 'static,
-    P: DeserializeOwned + Debug + Send + 'static,
-    R: DeserializeOwned + Debug + Send + 'static,
-{
-    let message_type: MessageType<M, P, R> = serde_json::from_str(input).unwrap();
-    let id = *next_id;
-    *next_id += 1;
-    match message_type {
-        MessageType::Request(message) => {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            connections.insert(id, tx);
-            set.spawn(async move {
-                handler(message, state, id, rx).await;
-                id
-            });
-        }
-        MessageType::Response(message) => {
-            let id = message.body.dest.unwrap();
-            let Some(tx) = connections.get(&id) else {
-                return;
-            };
-            if tx.send(message).is_err() {
-                dbg!("connection lost", &id);
-                connections.remove(&id);
-            }
-        }
-    }
 }
