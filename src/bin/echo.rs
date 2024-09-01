@@ -1,8 +1,6 @@
 use std::{future::Future, pin::Pin};
 
-use rust_maelstrom::{
-    main_loop, message::{Message, PeerMessage, Request}, service::Service, Node
-};
+use rust_maelstrom::{main_loop, message::Message, service::Service, Node};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
@@ -12,13 +10,26 @@ async fn main() {
 
 #[derive(Clone)]
 pub struct Handler;
-impl Service<rust_maelstrom::RequestArgs<Message<()>, EchoNode>> for Handler {
-    type Response = ();
+impl Service<rust_maelstrom::RequestArgs<Message<MessageRequest>, EchoNode>> for Handler {
+    type Response = MessageResponse;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
-    fn call(&mut self, request: rust_maelstrom::RequestArgs<Message<()>, EchoNode>) -> Self::Future {
-        todo!()
+    fn call(
+        &mut self,
+        rust_maelstrom::RequestArgs { request, .. }: rust_maelstrom::RequestArgs<
+            Message<MessageRequest>,
+            EchoNode,
+        >,
+    ) -> Self::Future {
+        match request.body {
+            MessageRequest::Echo { echo, msg_id } => Box::pin(async move {
+                Ok(MessageResponse::EchoOk {
+                    echo,
+                    in_reply_to: msg_id,
+                })
+            }),
+        }
     }
 }
 
@@ -33,32 +44,6 @@ impl Node for EchoNode {
     }
 }
 
-async fn handle_message(
-    message: Request<MessageRequest, ()>,
-    _node: std::sync::Arc<std::sync::Mutex<EchoNode>>,
-    _: usize,
-    _: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<()>>>,
-) {
-    match message {
-        Request::Maelstrom(message) => {
-            let (reply, body) = message.into_reply();
-            match body {
-                MessageRequest::Echo { echo, msg_id } => {
-                    let body = MessageResponse::EchoOk {
-                        echo,
-                        in_reply_to: msg_id,
-                    };
-                    reply.with_body(body).send(&mut std::io::stdout().lock());
-                }
-            }
-        }
-        Request::Peer(message) => {
-            let (_reply, _body) = message.into_reply();
-            unimplemented!()
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageRequest {
@@ -68,7 +53,7 @@ pub enum MessageRequest {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageResponse {
     EchoOk {
