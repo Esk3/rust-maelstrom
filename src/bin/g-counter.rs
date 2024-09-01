@@ -7,14 +7,14 @@ use std::{
 
 use rust_maelstrom::{
     message::{Message, PeerMessage},
-    Handler, HandlerRequest, HandlerResponse, MaelstromRequest, MaelstromResponse, Node,
-    PeerResponse, RequestArgs, RequestType, Service,
+    handler::Handler, HandlerRequest, HandlerResponse, MaelstromRequest, MaelstromResponse, Node,
+    PeerResponse, RequestArgs, RequestType, service::Service,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    rust_maelstrom::main_service_loop(Handler::new(MaelstromHandler)).await;
+    rust_maelstrom::main_loop(Handler::new(MaelstromHandler)).await;
 }
 
 #[derive(Debug)]

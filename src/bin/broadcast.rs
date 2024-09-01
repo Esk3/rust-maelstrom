@@ -1,17 +1,32 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future, pin::Pin};
 
 use rust_maelstrom::{
     main_loop,
     message::{self, send_messages_with_retry, Message, PeerMessage},
+    service::Service,
     Node,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    main_loop(handler).await;
+    main_loop(rust_maelstrom::handler::Handler::new(Handler)).await;
 }
 
+#[derive(Clone)]
+struct Handler;
+impl Service<rust_maelstrom::RequestArgs<Message<Request>, BroadcastNode>> for Handler {
+    type Response = ();
+
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+
+    fn call(
+        &mut self,
+        request: rust_maelstrom::RequestArgs<Message<Request>, BroadcastNode>,
+    ) -> Self::Future {
+        todo!()
+    }
+}
 async fn handler(
     message: message::Request<Request, PeerRequest>,
     node: std::sync::Arc<std::sync::Mutex<BroadcastNode>>,
@@ -108,6 +123,7 @@ async fn handler(
     }
 }
 
+#[derive(Debug)]
 pub struct BroadcastNode {
     id: String,
     neighbors: Vec<String>,

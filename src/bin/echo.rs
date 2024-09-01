@@ -1,15 +1,28 @@
+use std::{future::Future, pin::Pin};
+
 use rust_maelstrom::{
-    main_loop,
-    message::{Message, PeerMessage, Request},
-    Node,
+    main_loop, message::{Message, PeerMessage, Request}, service::Service, Node
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    main_loop(handle_message).await;
+    main_loop(rust_maelstrom::handler::Handler::new(Handler)).await;
 }
 
+#[derive(Clone)]
+pub struct Handler;
+impl Service<rust_maelstrom::RequestArgs<Message<()>, EchoNode>> for Handler {
+    type Response = ();
+
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+
+    fn call(&mut self, request: rust_maelstrom::RequestArgs<Message<()>, EchoNode>) -> Self::Future {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
 struct EchoNode {
     pub _id: String,
 }
