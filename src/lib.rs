@@ -17,13 +17,13 @@ pub mod service;
 
 pub async fn main_loop<H, P, N, Req, Res>(mut handler: Handler<H, P>)
 where
-    H: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
-    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = PeerMessage<Res>>
+    H: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static,
+    P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
         + Clone
         + 'static,
     N: Node + 'static + Debug,
     Req: DeserializeOwned + 'static,
-    Res: Serialize + DeserializeOwned + Debug,
+    Res: Serialize + DeserializeOwned + Debug + 'static,
 {
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
@@ -87,18 +87,18 @@ pub enum HandlerResponse<Res> {
 }
 
 #[derive(Debug)]
-pub struct RequestArgs<Req, N> {
+pub struct RequestArgs<Req, Res, N> {
     pub request: Req,
     pub node: Arc<Mutex<N>>,
     pub id: usize,
-    pub input: tokio::sync::mpsc::UnboundedReceiver<()>,
+    pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
 }
 
-pub struct HandlerRequest<Req, N> {
+pub struct HandlerRequest<Req, Res, N> {
     pub request: RequestType<Req>,
     pub node: Arc<Mutex<N>>,
     pub id: usize,
-    pub input: tokio::sync::mpsc::UnboundedReceiver<()>,
+    pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
 }
 
 #[derive(Deserialize)]

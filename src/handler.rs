@@ -14,20 +14,20 @@ pub struct Handler<M, P> {
     pub peer_handler: P,
 }
 
-impl<M, P, N, Req, Res> Service<HandlerRequest<Req, N>> for Handler<M, P>
+impl<M, P, N, Req, Res> Service<HandlerRequest<Req, Res, N>> for Handler<M, P>
 where
-    M: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
-    P: Service<RequestArgs<Message<PeerMessage<Req>>, N>, Response = PeerMessage<Res>>
+    M: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static,
+    P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
         + Clone
         + 'static,
     N: 'static,
     Req: 'static,
-    Res: Serialize,
+    Res: Serialize + 'static,
 {
     type Response = Message<HandlerResponse<Res>>;
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
-    fn call(&mut self, request: HandlerRequest<Req, N>) -> Self::Future {
+    fn call(&mut self, request: HandlerRequest<Req, Res, N>) -> Self::Future {
         let mut this = self.clone();
         match request.request {
             RequestType::Maelstrom(msg) => Box::pin(async move {
@@ -84,11 +84,12 @@ impl<M> Handler<M, PeerHander<M>> {
 pub struct PeerHander<S> {
     pub inner: S,
 }
-impl<Req, N, S, Res> Service<RequestArgs<Message<PeerMessage<Req>>, N>> for PeerHander<S>
+impl<Req, N, S, Res> Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>> for PeerHander<S>
 where
-    S: Service<RequestArgs<Message<Req>, N>, Response = Res> + Clone + 'static,
+    S: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static,
     N: 'static,
     Req: 'static,
+    Res: 'static
 {
     type Response = PeerMessage<Res>;
 
@@ -101,7 +102,7 @@ where
             node,
             id,
             input,
-        }: RequestArgs<message::Message<PeerMessage<Req>>, N>,
+        }: RequestArgs<message::Message<PeerMessage<Req>>, Res, N>,
     ) -> Self::Future {
         let mut this = self.clone();
         let (message, peer_message) = request_1.split();

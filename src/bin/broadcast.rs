@@ -1,5 +1,6 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
+use anyhow::bail;
 use rust_maelstrom::{
     main_loop,
     message::{self, send_messages_with_retry, Message, PeerMessage},
@@ -15,110 +16,62 @@ async fn main() {
 
 #[derive(Clone)]
 struct Handler;
-impl Service<rust_maelstrom::RequestArgs<Message<Request>, BroadcastNode>> for Handler {
-    type Response = ();
+impl Service<rust_maelstrom::RequestArgs<Message<Request>, Response, BroadcastNode>> for Handler {
+    type Response = Response;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
 
     fn call(
         &mut self,
-        request: rust_maelstrom::RequestArgs<Message<Request>, BroadcastNode>,
+        rust_maelstrom::RequestArgs {
+            request,
+            node,
+            id,
+            input,
+        }: rust_maelstrom::RequestArgs<Message<Request>, Response, BroadcastNode>,
     ) -> Self::Future {
-        todo!()
-    }
-}
-async fn handler(
-    message: message::Request<Request, PeerRequest>,
-    node: std::sync::Arc<std::sync::Mutex<BroadcastNode>>,
-    id: usize,
-    input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<PeerResponse>>>,
-) {
-    match message {
-        message::Request::Maelstrom(message) => {
-            let src = message.src.clone();
-            let (reply, body) = message.into_reply();
-            match body {
-                Request::Topology {
-                    mut topology,
-                    msg_id,
-                } => {
-                    {
-                        let mut lock = node.lock().unwrap();
-                        let neighbors = topology.remove(&lock.id).unwrap();
-                        lock.neighbors = neighbors;
-                    }
-                    let mut output = std::io::stdout().lock();
-                    let body = Response::TopologyOk {
-                        in_reply_to: msg_id,
-                    };
-                    reply.with_body(body).send(&mut output);
+        match request.body {
+            Request::Topology {
+                mut topology,
+                msg_id,
+            } => Box::pin(async move {
+                {
+                    let mut node = node.lock().unwrap();
+                    let neighbors = topology.remove(&node.id).unwrap();
+                    node.neighbors = neighbors;
                 }
-                Request::Broadcast { message, msg_id } => {
-                    {
-                        let out = std::io::stdout().lock();
-                        let body = Response::BroadcastOk {
+                Ok(Response::TopologyOk {
+                    in_reply_to: msg_id,
+                })
+            }),
+            Request::Broadcast { message, msg_id } => Box::pin(async move {
+                let messages = {
+                    let mut node = node.lock().unwrap();
+                    let Some(messages) = node.broadcast(&message, id, &request.src, msg_id) else {
+                        return Ok(Response::BroadcastOk {
                             in_reply_to: msg_id,
-                        };
-                        reply.with_body(body).send(out);
-                    }
-                    let messages = {
-                        let mut node = node.lock().unwrap();
-                        let Some(messages) = node.broadcast(&message, id, &src) else {
-                            return;
-                        };
-                        messages
+                        });
                     };
+                    messages
+                };
 
-                    send_messages_with_retry(
-                        messages,
-                        std::time::Duration::from_millis(100),
-                        input,
-                    )
+                send_messages_with_retry(messages, std::time::Duration::from_millis(100), input)
                     .await;
-                }
-                Request::Read { msg_id } => {
-                    let messages = {
-                        let node = node.lock().unwrap();
-                        node.messages.clone()
-                    };
-                    let output = std::io::stdout().lock();
-                    let body = Response::ReadOk {
-                        messages,
-                        in_reply_to: msg_id,
-                    };
-                    reply.with_body(body).send(output);
-                }
-            }
-        }
-        message::Request::Peer(message) => {
-            let src = message.src.clone();
-            let (reply, peer) = message.into_reply();
-            let (peer, body) = peer.into_reply(id);
-            match body {
-                PeerRequest::Broadcast { message } => {
-                    let messages = {
-                        let output = std::io::stdout().lock();
-                        let messages = {
-                            let mut node = node.lock().unwrap();
-                            node.broadcast(&message, id, &src)
-                        };
-                        reply
-                            .with_body(peer.with_body(PeerResponse::BroadcastOk))
-                            .send(output);
-                        match messages {
-                            Some(messages) => messages,
-                            None => return,
-                        }
-                    };
-
-                    send_messages_with_retry(
-                        messages,
-                        std::time::Duration::from_millis(100),
-                        input,
-                    )
-                    .await;
-                }
-            }
+                Ok(Response::BroadcastOk {
+                    in_reply_to: msg_id,
+                })
+            }),
+            Request::Read { msg_id } => Box::pin(async move {
+                let messages = {
+                    let node = node.lock().unwrap();
+                    node.messages.clone()
+                };
+                let body = Response::ReadOk {
+                    messages,
+                    in_reply_to: msg_id,
+                };
+                Ok(body)
+            }),
         }
     }
 }
@@ -145,7 +98,8 @@ impl BroadcastNode {
         message: &serde_json::Value,
         id: usize,
         src: &str,
-    ) -> Option<Vec<Message<PeerMessage<PeerRequest>>>> {
+        msg_id: usize,
+    ) -> Option<Vec<Message<PeerMessage<Request>>>> {
         if self.messages.contains(message) {
             return None;
         }
@@ -164,8 +118,9 @@ impl BroadcastNode {
                     src: id,
                     dest: None,
                     id: i,
-                    body: PeerRequest::Broadcast {
+                    body: Request::Broadcast {
                         message: message.clone(),
+                        msg_id,
                     },
                 },
             })
@@ -174,7 +129,7 @@ impl BroadcastNode {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     Topology {
@@ -189,7 +144,7 @@ pub enum Request {
         msg_id: usize,
     },
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     TopologyOk {
@@ -202,13 +157,4 @@ pub enum Response {
         messages: Vec<serde_json::Value>,
         in_reply_to: usize,
     },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum PeerRequest {
-    Broadcast { message: serde_json::Value },
-}
-#[derive(Debug, Serialize, Deserialize)]
-pub enum PeerResponse {
-    BroadcastOk,
 }

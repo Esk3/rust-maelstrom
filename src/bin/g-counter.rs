@@ -47,11 +47,11 @@ impl GNode {
 
 #[derive(Clone)]
 struct MaelstromHandler;
-impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GNode>> for MaelstromHandler {
+impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GResponse, GNode>> for MaelstromHandler {
     type Response = GResponse;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
-    fn call(&mut self, request: RequestArgs<Message<GRequest>, GNode>) -> Self::Future {
+    fn call(&mut self, request: RequestArgs<Message<GRequest>, GResponse, GNode>) -> Self::Future {
         dbg!(&request);
         match request.request.body {
             GRequest::Add {
