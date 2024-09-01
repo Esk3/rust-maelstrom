@@ -79,7 +79,7 @@ where
         + 'static,
     N: Node + 'static + Debug,
     Req: DeserializeOwned + 'static,
-    Res: Serialize + Debug,
+    Res: Serialize + DeserializeOwned + Debug,
 {
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
@@ -108,12 +108,14 @@ where
     }
 
     let mut id = 0;
-    let mut stderr = std::io::stderr().lock();
-    let mut out = std::io::stdout().lock();
     while let Ok(line) = lines.next_line().await {
         let line = dbg!(line.unwrap());
         id += 1;
-        let request = serde_json::from_str(&line).unwrap();
+        let request: MessageType2<Req, Res> = serde_json::from_str(&line).unwrap();
+        let request = match request {
+            MessageType2::Request(req) => req,
+            MessageType2::Response(_) => continue,
+        };
         let handler_request = HandlerRequest {
             request,
             node: node.clone(),
@@ -121,8 +123,7 @@ where
             input: tokio::sync::mpsc::unbounded_channel().1,
         };
         let response: Message<_> = handler.call(handler_request).await.unwrap();
-        response.send(&mut stderr);
-        response.send(&mut out);
+        response.send(std::io::stdout().lock());
     }
 }
 
@@ -261,8 +262,8 @@ where
                     id,
                     input,
                 })
-                .await;
-            Ok(todo!())
+                .await?;
+            Ok(peer_message.into_reply(id).0.with_body(response))
         })
     }
 }
@@ -294,25 +295,26 @@ where
                         input: request.input,
                     })
                     .await;
-                Ok((Message {
+                Ok(Message {
                     src: dest,
                     dest: src,
                     body: HandlerResponse::Maelstrom(body.unwrap()),
-                }))
+                })
             }),
             RequestType::Peer(req) => Box::pin(async move {
+                let (src, dest) = (req.src.clone(), req.dest.clone());
                 let body = this
                     .peer_handler
                     .call(RequestArgs {
                         request: req,
-                        node: todo!(),
-                        id: todo!(),
-                        input: todo!(),
+                        node: request.node,
+                        id: request.id,
+                        input: request.input,
                     })
                     .await;
                 Ok(Message {
-                    src: todo!(),
-                    dest: todo!(),
+                    src: dest,
+                    dest: src,
                     body: HandlerResponse::Peer(body.unwrap()),
                 })
             }),
@@ -327,6 +329,7 @@ pub enum HandlerResponse<Res> {
     Peer(PeerMessage<Res>),
 }
 
+#[derive(Debug)]
 pub struct RequestArgs<Req, N> {
     pub request: Req,
     pub node: Arc<Mutex<N>>,
@@ -346,6 +349,13 @@ pub struct HandlerRequest<Req, N> {
 pub enum RequestType<Req> {
     Maelstrom(Message<Req>),
     Peer(Message<PeerMessage<Req>>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum MessageType2<Req, Res> {
+    Request(RequestType<Req>),
+    Response(Message<PeerMessage<Res>>),
 }
 
 pub enum MaelstromRequest {

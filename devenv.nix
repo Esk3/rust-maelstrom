@@ -12,7 +12,7 @@
   scripts.maelstrom-no-build.exec = "./maelstrom/maelstrom $@";
 
   enterShell = ''
-    fish
+    exec fish
   '';
 
   # https://devenv.sh/tests/

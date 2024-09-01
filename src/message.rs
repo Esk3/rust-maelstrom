@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::RequestType;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message<T> {
     pub src: String,
@@ -58,12 +60,14 @@ pub enum MessageType<M, P, R> {
     Response(Message<PeerMessage<R>>),
 }
 
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Request<M, P> {
     Maelstrom(Message<M>),
     Peer(Message<PeerMessage<P>>),
 }
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PeerMessage<T> {

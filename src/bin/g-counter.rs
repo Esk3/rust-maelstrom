@@ -6,8 +6,9 @@ use std::{
 };
 
 use rust_maelstrom::{
-    message::Message, Handler, HandlerRequest, HandlerResponse, MaelstromRequest,
-    MaelstromResponse, Node, PeerResponse, RequestArgs, RequestType, Service,
+    message::{Message, PeerMessage},
+    Handler, HandlerRequest, HandlerResponse, MaelstromRequest, MaelstromResponse, Node,
+    PeerResponse, RequestArgs, RequestType, Service,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,14 +20,18 @@ async fn main() {
 #[derive(Debug)]
 struct GNode {
     id: String,
+    nodes: Vec<String>,
     count: usize,
+    seen_uuids: Vec<String>,
 }
 
 impl Node for GNode {
     fn init(node_id: String, node_ids: Vec<String>) -> Self {
         Self {
-            id: dbg!(node_id),
+            id: node_id,
+            nodes: node_ids,
             count: 0,
+            seen_uuids: Vec::new(),
         }
     }
 }
@@ -47,15 +52,53 @@ impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GNode>> for Maelstro
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
     fn call(&mut self, request: RequestArgs<Message<GRequest>, GNode>) -> Self::Future {
+        dbg!(&request);
         match request.request.body {
-            GRequest::Add { delta, msg_id } => Box::pin(async move {
+            GRequest::Add {
+                delta,
+                msg_id,
+                uuid,
+            } => Box::pin(async move {
+                dbg!("add");
                 let mut node = request.node.lock().unwrap();
-                node.add(delta);
+                let uuid = uuid.unwrap_or_else(|| format!("{}{msg_id}", node.id));
+                if !node.seen_uuids.contains(&uuid) {
+                    dbg!("new uuid", &uuid);
+                    node.add(delta);
+                    node.seen_uuids.push(uuid.clone());
+                    let mut out = std::io::stdout().lock();
+                    dbg!(&out);
+                    for nei in node
+                        .nodes
+                        .iter()
+                        .filter(|n| n.as_str() != node.id)
+                        .filter(|n| n.as_str() != request.request.src)
+                    {
+                        dbg!(Message {
+                            src: node.id.clone(),
+                            dest: nei.clone(),
+                            body: PeerMessage {
+                                src: request.id,
+                                dest: None,
+                                id: request.id,
+                                body: GRequest::Add {
+                                    delta,
+                                    msg_id,
+                                    uuid: Some(uuid.clone()),
+                                },
+                            },
+                        })
+                        .send(&mut out);
+                    }
+                } else {
+                    dbg!("seen uuid", uuid);
+                }
                 Ok(GResponse::AddOk {
                     in_reply_to: msg_id,
                 })
             }),
             GRequest::Read { msg_id } => Box::pin(async move {
+                dbg!("read");
                 let node = request.node.lock().unwrap();
                 let value = node.read();
                 Ok(GResponse::ReadOk {
@@ -72,7 +115,9 @@ async fn handler_test() {
     let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
         id: "test_node".to_string(),
+        nodes: Vec::new(),
         count: 0,
+        seen_uuids: Vec::new(),
     };
     let node = Arc::new(Mutex::new(node));
     let request = HandlerRequest {
@@ -94,7 +139,9 @@ async fn add_test() {
     let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
         id: "Test node".to_string(),
+        nodes: Vec::new(),
         count: 0,
+        seen_uuids: Vec::new(),
     };
     let node = Arc::new(Mutex::new(node));
     let num = 2;
@@ -105,6 +152,7 @@ async fn add_test() {
             body: GRequest::Add {
                 delta: num,
                 msg_id: 1,
+                uuid: None,
             },
         }),
         node: node.clone(),
@@ -131,13 +179,19 @@ async fn add_test() {
     assert_eq!(node.lock().unwrap().count, num);
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum GRequest {
-    Add { delta: usize, msg_id: usize },
-    Read { msg_id: usize },
+    Add {
+        delta: usize,
+        msg_id: usize,
+        uuid: Option<String>,
+    },
+    Read {
+        msg_id: usize,
+    },
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum GResponse {
     AddOk { in_reply_to: usize },
