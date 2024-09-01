@@ -16,16 +16,16 @@ pub struct Handler<M, P> {
 
 impl<M, P, N, Req, Res> Service<HandlerRequest<Req, Res, N>> for Handler<M, P>
 where
-    M: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static,
+    M: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
     P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
         + Clone
-        + 'static,
-    N: 'static,
-    Req: 'static,
-    Res: Serialize + 'static,
+        + 'static + Send,
+    N: 'static + Send,
+    Req: 'static + Send,
+    Res: Serialize + 'static + Send,
 {
     type Response = Message<HandlerResponse<Res>>;
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
 
     fn call(&mut self, request: HandlerRequest<Req, Res, N>) -> Self::Future {
         let mut this = self.clone();
@@ -86,14 +86,14 @@ pub struct PeerHander<S> {
 }
 impl<Req, N, S, Res> Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>> for PeerHander<S>
 where
-    S: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static,
-    N: 'static,
-    Req: 'static,
-    Res: 'static
+    S: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
+    N: 'static + Send,
+    Req: 'static + Send,
+    Res: 'static + Send
 {
     type Response = PeerMessage<Res>;
 
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
 
     fn call(
         &mut self,

@@ -19,7 +19,7 @@ struct Handler;
 impl Service<rust_maelstrom::RequestArgs<Message<Request>, Response, BroadcastNode>> for Handler {
     type Response = Response;
 
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
 
     fn call(
         &mut self,

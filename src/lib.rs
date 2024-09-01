@@ -1,4 +1,5 @@
 use handler::Handler;
+use input::{InputHandler, InputResponse};
 use message::{InitRequest, InitResponse, Message, MessageType, PeerMessage, Request};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use service::Service;
@@ -7,9 +8,10 @@ use std::{
     fmt::Debug,
     future::Future,
     io::{stdout, Write},
+    sync::{Arc, Mutex},
 };
-use tokio::io::AsyncBufReadExt;
 
+use tokio::io::AsyncBufReadExt;
 pub mod handler;
 pub mod input;
 pub mod message;
@@ -17,13 +19,13 @@ pub mod service;
 
 pub async fn main_loop<H, P, N, Req, Res>(mut handler: Handler<H, P>)
 where
-    H: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static,
+    H: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
     P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
         + Clone
-        + 'static,
-    N: Node + 'static + Debug,
-    Req: DeserializeOwned + 'static,
-    Res: Serialize + DeserializeOwned + Debug + 'static,
+        + 'static + Send,
+    N: Node + 'static + Debug + Send,
+    Req: DeserializeOwned + 'static + Debug + Send,
+    Res: Serialize + DeserializeOwned + Debug + Send + 'static + Debug,
 {
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
@@ -50,34 +52,69 @@ where
         output.flush().unwrap();
     }
 
+    let mut input_handler = InputHandler::<Req, Res>::new();
     let mut id = 0;
+    let mut set = tokio::task::JoinSet::new();
+    let mut channels = HashMap::new();
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let line = dbg!(line.unwrap()).unwrap();
+                let input = input_handler.call(line).await.unwrap();
+                match dbg!(input) {
+                    InputResponse::NewHandler(request) => {
+                        id += 1;
+                        let (rx, tx) = tokio::sync::mpsc::unbounded_channel();
+                        channels.insert(id, rx);
+                        let handler_request = HandlerRequest {
+                            request,
+                            node: node.clone(),
+                            id,
+                            input: tx,
+                        };
+                        let mut handler = handler.clone();
+                        set.spawn(async move {
+                            let response = handler.call(handler_request).await.unwrap();
+                            (id, response)
+                        });
+                    }
+                    InputResponse::HandlerMessage { id, message } => if let Some(rx) = channels.get(&id) {
+                        rx.send(message);
+                    } else {
+                        dbg!("channel closed", id);
+                    },
+                }
+            },
+            Some(handler) = set.join_next() => {
+                let (id, response) = dbg!(dbg!(handler).unwrap());
+                channels.remove(&id);
+                response.send(std::io::stdout().lock());
+            }
+        }
+    }
     while let Ok(line) = lines.next_line().await {
         let line = dbg!(line.unwrap());
-        id += 1;
-        let request: MessageType2<Req, Res> = serde_json::from_str(&line).unwrap();
-        let request = match request {
-            MessageType2::Request(req) => req,
-            MessageType2::Response(_) => continue,
-        };
-        let handler_request = HandlerRequest {
-            request,
-            node: node.clone(),
-            id,
-            input: tokio::sync::mpsc::unbounded_channel().1,
-        };
-        let response: Message<_> = handler.call(handler_request).await.unwrap();
-        response.send(std::io::stdout().lock());
+        let input = input_handler.call(line).await.unwrap();
+        match dbg!(input) {
+            InputResponse::NewHandler(request) => {
+                id += 1;
+                let handler_request = HandlerRequest {
+                    request,
+                    node: node.clone(),
+                    id,
+                    input: tokio::sync::mpsc::unbounded_channel().1,
+                };
+                let response: Message<_> = handler.call(handler_request).await.unwrap();
+                response.send(std::io::stdout().lock());
+            }
+            InputResponse::HandlerMessage { id, message } => todo!("{message:?}"),
+        }
     }
 }
 
 pub trait Node {
     fn init(node_id: String, node_ids: Vec<String>) -> Self;
 }
-
-use std::{
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -101,7 +138,7 @@ pub struct HandlerRequest<Req, Res, N> {
     pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum RequestType<Req> {
     Maelstrom(Message<Req>),

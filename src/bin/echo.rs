@@ -15,7 +15,7 @@ impl Service<rust_maelstrom::RequestArgs<Message<MessageRequest>, MessageRespons
 {
     type Response = MessageResponse;
 
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>>>>;
+    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
 
     fn call(
         &mut self,

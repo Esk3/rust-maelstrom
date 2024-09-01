@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use serde::{Deserialize, Serialize};
 
 use crate::RequestType;
@@ -114,14 +116,15 @@ impl<T> PeerMessage<T> {
     }
 }
 
-pub async fn send_messages_with_retry<T, B>(
+pub async fn send_messages_with_retry<T, B: Debug>(
     mut messages: Vec<Message<PeerMessage<T>>>,
     interval: std::time::Duration,
     mut input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<B>>>,
 ) where
     T: Serialize,
 {
-    let mut interval = tokio::time::interval(interval);
+    // let mut interval = tokio::time::interval(interval);
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1000));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     while !messages.is_empty() {
         tokio::select! {
@@ -132,6 +135,7 @@ pub async fn send_messages_with_retry<T, B>(
                 }
             },
             Some(response) = input.recv() => {
+                dbg!(&response);
                 messages.retain(|message| !message.body.matches_response(&response));
             }
         }
