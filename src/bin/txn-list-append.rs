@@ -1,22 +1,61 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
 use rust_maelstrom::{
-    handler::{HandlerRequest, HandlerResponse},
-    main_loop,
+    handler::{HandlerRequest, HandlerResponse, RequestType},
+    input::InputResponse,
     message::Message,
     service::Service,
-    Fut,
+    Fut, MainLoop,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    let handler = Middleware {
-        inner: rust_maelstrom::handler::Handler::new(Handler),
+    let main_loop = MainLoop {
+        request_handler: rust_maelstrom::handler::Handler::new(Handler),
+        input_handler: InputHandler {
+            inner: rust_maelstrom::input::InputHandler::new(),
+        },
     };
-    main_loop(handler).await;
+    main_loop.run().await;
 }
+#[derive(Debug, Clone)]
+struct InputHandler {
+    inner: rust_maelstrom::input::InputHandler<Request, Response>,
+}
+impl rust_maelstrom::service::Service<String> for InputHandler {
+    type Response = InputResponse<Request, Response>;
 
+    type Future = Fut<Self::Response>;
+
+    fn call(&mut self, request: String) -> Self::Future {
+        let mut this = self.clone();
+        Box::pin(async move {
+            let response = this.inner.call(request).await?;
+            if let InputResponse::NewHandler(RequestType::Maelstrom(message)) = response {
+                if let Message {
+                    body: Request::ReadOk { in_reply_to },
+                    ..
+                } = message
+                {
+                    Ok(InputResponse::HandlerMessage {
+                        id: in_reply_to,
+                        message: message.with_body(rust_maelstrom::message::PeerMessage {
+                            src: 1,
+                            dest: None,
+                            id: in_reply_to,
+                            body: Response::TxnOk { in_reply_to: 1, txn: Vec::new() },
+                        }),
+                    })
+                } else {
+                    Ok(InputResponse::NewHandler(RequestType::Maelstrom(message)))
+                }
+            } else {
+                Ok(response)
+            }
+        })
+    }
+}
 #[derive(Clone)]
 struct Middleware<T> {
     inner: T,
@@ -24,7 +63,10 @@ struct Middleware<T> {
 
 impl<T> rust_maelstrom::service::Service<HandlerRequest<Request, Response, Node>> for Middleware<T>
 where
-    T: Service<HandlerRequest<Request, Response, Node>, Response = Message<HandlerResponse<Response>>> + 'static,
+    T: Service<
+            HandlerRequest<Request, Response, Node>,
+            Response = Message<HandlerResponse<Response>>,
+        > + 'static,
 {
     type Response = Message<HandlerResponse<Response>>;
 
@@ -82,6 +124,7 @@ impl
         let mut node = node.lock().unwrap();
         let (txn, msg_id) = match request.body {
             Request::Txn { msg_id, txn } => (txn, msg_id),
+            Request::ReadOk { in_reply_to } => todo!(),
         };
         let msg = Message {
             src: node.id.clone(),
@@ -109,29 +152,30 @@ impl
         })
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
     Txn { msg_id: usize, txn: Vec<Txn> },
+    ReadOk { in_reply_to: usize },
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Response {
     TxnOk { in_reply_to: usize, txn: Vec<Txn> },
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 enum Txn {
     Read(R, serde_json::Value, Option<Vec<serde_json::Value>>),
     Append(Append, serde_json::Value, serde_json::Value),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 enum R {
     R,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 enum Append {
     Append,

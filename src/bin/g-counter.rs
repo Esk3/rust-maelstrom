@@ -1,16 +1,14 @@
 use std::{future::Future, pin::Pin};
 
 use rust_maelstrom::{
-    handler::{Handler, RequestArgs},
-    message::{Message, PeerMessage},
-    service::Service,
-    Node,
+    handler::{Handler, RequestArgs}, message::{Message, PeerMessage}, service::Service, MainLoop, Node
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    rust_maelstrom::main_loop(Handler::new(MaelstromHandler)).await;
+    let main_loop = MainLoop::new(Handler::new(MaelstromHandler));
+    main_loop.run().await;
 }
 
 #[derive(Debug)]

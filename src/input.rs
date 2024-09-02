@@ -8,6 +8,7 @@ use crate::{
     service::Service,
 };
 
+#[derive(Debug, Clone)]
 pub struct InputHandler<Req, Res>(std::marker::PhantomData<Req>, std::marker::PhantomData<Res>);
 
 impl<Req, Res> InputHandler<Req, Res> {

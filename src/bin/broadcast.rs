@@ -1,16 +1,16 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
 use rust_maelstrom::{
-    main_loop,
     message::{send_messages_with_retry, Message, PeerMessage},
     service::Service,
-    Node,
+    MainLoop, Node,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    main_loop(rust_maelstrom::handler::Handler::new(Handler)).await;
+    let main_loop = MainLoop::new(rust_maelstrom::handler::Handler::new(Handler));
+    main_loop.run().await;
 }
 
 #[derive(Clone)]
