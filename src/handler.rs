@@ -1,12 +1,41 @@
+use std::sync::{Arc, Mutex};
 use std::{future::Future, pin::Pin};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{self, Message, PeerMessage},
     service::Service,
-    HandlerRequest, HandlerResponse, RequestArgs, RequestType,
 };
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum HandlerResponse<Res> {
+    Maelstrom(Res),
+    Peer(PeerMessage<Res>),
+}
+
+#[derive(Debug)]
+pub struct RequestArgs<Req, Res, N> {
+    pub request: Req,
+    pub node: Arc<Mutex<N>>,
+    pub id: usize,
+    pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
+}
+
+pub struct HandlerRequest<Req, Res, N> {
+    pub request: RequestType<Req>,
+    pub node: Arc<Mutex<N>>,
+    pub id: usize,
+    pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RequestType<Req> {
+    Maelstrom(Message<Req>),
+    Peer(Message<PeerMessage<Req>>),
+}
 
 #[derive(Clone)]
 pub struct Handler<M, P> {
@@ -19,7 +48,8 @@ where
     M: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
     P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
         + Clone
-        + 'static + Send,
+        + 'static
+        + Send,
     N: 'static + Send,
     Req: 'static + Send,
     Res: Serialize + 'static + Send,
@@ -89,7 +119,7 @@ where
     S: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
     N: 'static + Send,
     Req: 'static + Send,
-    Res: 'static + Send
+    Res: 'static + Send,
 {
     type Response = PeerMessage<Res>;
 

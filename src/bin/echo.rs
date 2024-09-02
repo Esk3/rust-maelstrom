@@ -10,7 +10,7 @@ async fn main() {
 
 #[derive(Clone)]
 pub struct Handler;
-impl Service<rust_maelstrom::RequestArgs<Message<MessageRequest>, MessageResponse, EchoNode>>
+impl Service<rust_maelstrom::handler::RequestArgs<Message<MessageRequest>, MessageResponse, EchoNode>>
     for Handler
 {
     type Response = MessageResponse;
@@ -19,7 +19,7 @@ impl Service<rust_maelstrom::RequestArgs<Message<MessageRequest>, MessageRespons
 
     fn call(
         &mut self,
-        rust_maelstrom::RequestArgs { request, .. }: rust_maelstrom::RequestArgs<
+        rust_maelstrom::handler::RequestArgs { request, .. }: rust_maelstrom::handler::RequestArgs<
             Message<MessageRequest>,
             MessageResponse,
             EchoNode,

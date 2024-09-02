@@ -15,19 +15,21 @@ async fn main() {
 
 #[derive(Clone)]
 struct Handler;
-impl Service<rust_maelstrom::RequestArgs<Message<Request>, Response, BroadcastNode>> for Handler {
+impl Service<rust_maelstrom::handler::RequestArgs<Message<Request>, Response, BroadcastNode>>
+    for Handler
+{
     type Response = Response;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
 
     fn call(
         &mut self,
-        rust_maelstrom::RequestArgs {
+        rust_maelstrom::handler::RequestArgs {
             request,
             node,
             id,
             input,
-        }: rust_maelstrom::RequestArgs<Message<Request>, Response, BroadcastNode>,
+        }: rust_maelstrom::handler::RequestArgs<Message<Request>, Response, BroadcastNode>,
     ) -> Self::Future {
         match request.body {
             Request::Topology {

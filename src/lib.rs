@@ -1,14 +1,9 @@
-use handler::Handler;
+use handler::{Handler, HandlerRequest, RequestArgs};
 use input::{InputHandler, InputResponse};
 use message::{InitRequest, InitResponse, Message, PeerMessage};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use service::Service;
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    io::Write,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, fmt::Debug, io::Write};
 
 use tokio::io::AsyncBufReadExt;
 pub mod handler;
@@ -97,53 +92,3 @@ where
 pub trait Node {
     fn init(node_id: String, node_ids: Vec<String>) -> Self;
 }
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum HandlerResponse<Res> {
-    Maelstrom(Res),
-    Peer(PeerMessage<Res>),
-}
-
-#[derive(Debug)]
-pub struct RequestArgs<Req, Res, N> {
-    pub request: Req,
-    pub node: Arc<Mutex<N>>,
-    pub id: usize,
-    pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
-}
-
-pub struct HandlerRequest<Req, Res, N> {
-    pub request: RequestType<Req>,
-    pub node: Arc<Mutex<N>>,
-    pub id: usize,
-    pub input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<Res>>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum RequestType<Req> {
-    Maelstrom(Message<Req>),
-    Peer(Message<PeerMessage<Req>>),
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-pub enum MessageType2<Req, Res> {
-    Request(RequestType<Req>),
-    Response(Message<PeerMessage<Res>>),
-}
-
-pub enum MaelstromRequest {
-    Add(usize),
-    Read,
-}
-
-#[derive(Debug)]
-pub enum MaelstromResponse {
-    AddOk,
-    ReadOk(usize),
-}
-
-#[derive(Debug)]
-pub enum PeerResponse {}

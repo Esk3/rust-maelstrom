@@ -1,10 +1,10 @@
 use std::{future::Future, pin::Pin};
 
 use rust_maelstrom::{
-    handler::Handler,
+    handler::{Handler, RequestArgs},
     message::{Message, PeerMessage},
     service::Service,
-    Node, RequestArgs,
+    Node,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +43,7 @@ impl GNode {
 
 #[derive(Clone)]
 struct MaelstromHandler;
-impl Service<rust_maelstrom::RequestArgs<Message<GRequest>, GResponse, GNode>>
+impl Service<rust_maelstrom::handler::RequestArgs<Message<GRequest>, GResponse, GNode>>
     for MaelstromHandler
 {
     type Response = GResponse;
@@ -117,8 +117,8 @@ async fn handler_test() {
         seen_uuids: Vec::new(),
     };
     let node = Arc::new(Mutex::new(node));
-    let request = rust_maelstrom::HandlerRequest {
-        request: rust_maelstrom::RequestType::Maelstrom(Message {
+    let request = rust_maelstrom::handler::HandlerRequest {
+        request: rust_maelstrom::handler::RequestType::Maelstrom(Message {
             src: "test_src".to_string(),
             dest: "test dest".to_string(),
             body: GRequest::Read { msg_id: 1 },
@@ -143,8 +143,8 @@ async fn add_test() {
     };
     let node = Arc::new(Mutex::new(node));
     let num = 2;
-    let request = rust_maelstrom::HandlerRequest {
-        request: rust_maelstrom::RequestType::Maelstrom(Message {
+    let request = rust_maelstrom::handler::HandlerRequest {
+        request: rust_maelstrom::handler::RequestType::Maelstrom(Message {
             src: "testing src".to_string(),
             dest: "testing dest".to_string(),
             body: GRequest::Add {
@@ -161,8 +161,8 @@ async fn add_test() {
     assert!(response.is_ok());
     dbg!(response.unwrap());
 
-    let request = rust_maelstrom::HandlerRequest {
-        request: rust_maelstrom::RequestType::Maelstrom(Message {
+    let request = rust_maelstrom::handler::HandlerRequest {
+        request: rust_maelstrom::handler::RequestType::Maelstrom(Message {
             src: "testing src".to_string(),
             dest: "testing destl".to_string(),
             body: GRequest::Read { msg_id: 2 },

@@ -3,9 +3,9 @@ use std::{fmt::Debug, future::Future, pin::Pin};
 use serde::{de::DeserializeOwned, Deserialize};
 
 use crate::{
+    handler::RequestType,
     message::{Message, PeerMessage},
     service::Service,
-    RequestType,
 };
 
 pub struct InputHandler<Req, Res>(std::marker::PhantomData<Req>, std::marker::PhantomData<Res>);
