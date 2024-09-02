@@ -1,24 +1,37 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
-use rust_maelstrom::{main_loop, message::Message, Fut};
+use rust_maelstrom::{
+    handler::{HandlerRequest, HandlerResponse},
+    main_loop,
+    message::Message,
+    service::Service,
+    Fut,
+};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    main_loop(rust_maelstrom::handler::Handler::new(Handler)).await;
+    let handler = Middleware {
+        inner: rust_maelstrom::handler::Handler::new(Handler),
+    };
+    main_loop(handler).await;
 }
 
+#[derive(Clone)]
 struct Middleware<T> {
     inner: T,
 }
 
-impl<T, Req> rust_maelstrom::service::Service<Req> for Middleware<T> {
-    type Response = ();
+impl<T> rust_maelstrom::service::Service<HandlerRequest<Request, Response, Node>> for Middleware<T>
+where
+    T: Service<HandlerRequest<Request, Response, Node>, Response = Message<HandlerResponse<Response>>> + 'static,
+{
+    type Response = Message<HandlerResponse<Response>>;
 
-    type Future = Fut<()>;
+    type Future = Fut<Self::Response>;
 
-    fn call(&mut self, request: Req) -> Self::Future {
-        todo!()
+    fn call(&mut self, request: HandlerRequest<Request, Response, Node>) -> Self::Future {
+        Box::pin(self.inner.call(request))
     }
 }
 

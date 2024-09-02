@@ -1,4 +1,4 @@
-use handler::{Handler, HandlerRequest, RequestArgs};
+use handler::{Handler, HandlerRequest, HandlerResponse, RequestArgs};
 use input::{InputHandler, InputResponse};
 use message::{InitRequest, InitResponse, Message, PeerMessage};
 use serde::{de::DeserializeOwned, Serialize};
@@ -13,13 +13,9 @@ pub mod service;
 
 pub type Fut<T> = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<T>> + Send>>;
 
-pub async fn main_loop<H, P, N, Req, Res>(handler: Handler<H, P>)
+pub async fn main_loop<H, N, Req, Res>(handler: H)
 where
-    H: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
-    P: Service<RequestArgs<Message<PeerMessage<Req>>, Res, N>, Response = PeerMessage<Res>>
-        + Clone
-        + 'static
-        + Send,
+    H: Service<HandlerRequest<Req, Res, N>, Response = Message<HandlerResponse<Res>>> + Clone + 'static + Send,
     N: Node + 'static + Debug + Send,
     Req: DeserializeOwned + 'static + Debug + Send,
     Res: Serialize + DeserializeOwned + Debug + Send + 'static + Debug,
