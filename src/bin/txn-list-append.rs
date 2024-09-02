@@ -1,20 +1,38 @@
-use std::{future::Future, pin::Pin};
+use std::{collections::HashMap, future::Future, pin::Pin};
 
-use rust_maelstrom::message::Message;
+use rust_maelstrom::{main_loop, message::Message};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
-async fn main() {}
+async fn main() {
+    main_loop(rust_maelstrom::handler::Handler::new(Handler)).await;
+}
 
-struct Node {}
+#[derive(Debug)]
+struct Node {
+    id: String,
+    state: HashMap<serde_json::Value, Vec<serde_json::Value>>,
+}
 
-impl rust_maelstrom::Node for Node {
-    fn init(node_id: String, node_ids: Vec<String>) -> Self {
-        dbg!("todo, init node");
-        Self {}
+impl Node {
+    pub fn read(&self, key: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+        self.state.get(key)
+    }
+    pub fn append(&mut self, key: serde_json::Value, value: serde_json::Value) {
+        self.state.entry(key).or_default().push(value);
     }
 }
 
+impl rust_maelstrom::Node for Node {
+    fn init(node_id: String, node_ids: Vec<String>) -> Self {
+        Self {
+            id: node_id,
+            state: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Handler;
 impl
     rust_maelstrom::service::Service<
@@ -27,16 +45,33 @@ impl
 
     fn call(
         &mut self,
-        request: rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Node>,
+        rust_maelstrom::handler::RequestArgs {
+            request,
+            node,
+            id: _,
+            input: _,
+        }: rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Node>,
     ) -> Self::Future {
+        let mut node = node.lock().unwrap();
+        let txn = match request.body {
+            Request::Txn { msg_id, txn } => txn
+                .into_iter()
+                .map(|op| match op {
+                    Txn::Read(r, key, _) => {
+                        let value = node.read(&key).cloned().unwrap_or(Vec::new());
+                        Txn::Read(r, key, Some(value))
+                    }
+                    Txn::Append(a, key, value) => {
+                        node.append(key.clone(), value.clone());
+                        Txn::Append(a, key, value)
+                    }
+                })
+                .collect(),
+        };
         Box::pin(async move {
             Ok(Response::TxnOk {
                 in_reply_to: 0,
-                txn: vec![Txn::Read(
-                    R::R,
-                    serde_json::Number::from_f64(1.0).into(),
-                    None,
-                )],
+                txn,
             })
         })
     }
@@ -46,7 +81,7 @@ impl
 enum Request {
     Txn { msg_id: usize, txn: Vec<Txn> },
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Response {
     TxnOk { in_reply_to: usize, txn: Vec<Txn> },
