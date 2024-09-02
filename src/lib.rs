@@ -11,6 +11,8 @@ pub mod input;
 pub mod message;
 pub mod service;
 
+pub type Fut<T> = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<T>> + Send>>;
+
 pub async fn main_loop<H, P, N, Req, Res>(handler: Handler<H, P>)
 where
     H: Service<RequestArgs<Message<Req>, Res, N>, Response = Res> + Clone + 'static + Send,
