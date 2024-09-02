@@ -56,9 +56,9 @@ where
     loop {
         tokio::select! {
             line = lines.next_line() => {
-                let line = dbg!(line.unwrap()).unwrap();
+                let line = line.unwrap().unwrap();
                 let input = input_handler.call(line).await.unwrap();
-                match dbg!(input) {
+                match input {
                     InputResponse::NewHandler(request) => {
                         id += 1;
                         let (rx, tx) = tokio::sync::mpsc::unbounded_channel();
@@ -83,7 +83,7 @@ where
                 }
             },
             Some(handler) = set.join_next() => {
-                let (id, response) = dbg!(dbg!(handler).unwrap());
+                let (id, response) = handler.unwrap();
                 channels.remove(&id);
                 response.send(std::io::stdout().lock());
             }

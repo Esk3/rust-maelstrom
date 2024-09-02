@@ -53,24 +53,25 @@ impl
         }: rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Node>,
     ) -> Self::Future {
         let mut node = node.lock().unwrap();
-        let txn = match request.body {
-            Request::Txn { msg_id, txn } => txn
-                .into_iter()
-                .map(|op| match op {
-                    Txn::Read(r, key, _) => {
-                        let value = node.read(&key).cloned().unwrap_or(Vec::new());
-                        Txn::Read(r, key, Some(value))
-                    }
-                    Txn::Append(a, key, value) => {
-                        node.append(key.clone(), value.clone());
-                        Txn::Append(a, key, value)
-                    }
-                })
-                .collect(),
+        let (txn, msg_id) = match request.body {
+            Request::Txn { msg_id, txn } => (txn, msg_id),
         };
+        let txn = txn
+            .into_iter()
+            .map(|op| match op {
+                Txn::Read(r, key, _) => {
+                    let value = node.read(&key).cloned().unwrap_or(Vec::new());
+                    Txn::Read(r, key, Some(value))
+                }
+                Txn::Append(a, key, value) => {
+                    node.append(key.clone(), value.clone());
+                    Txn::Append(a, key, value)
+                }
+            })
+            .collect();
         Box::pin(async move {
             Ok(Response::TxnOk {
-                in_reply_to: 0,
+                in_reply_to: msg_id,
                 txn,
             })
         })
