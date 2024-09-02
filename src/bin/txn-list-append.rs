@@ -1,11 +1,25 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
-use rust_maelstrom::{main_loop, message::Message};
+use rust_maelstrom::{main_loop, message::Message, Fut};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
     main_loop(rust_maelstrom::handler::Handler::new(Handler)).await;
+}
+
+struct Middleware<T> {
+    inner: T,
+}
+
+impl<T, Req> rust_maelstrom::service::Service<Req> for Middleware<T> {
+    type Response = ();
+
+    type Future = Fut<()>;
+
+    fn call(&mut self, request: Req) -> Self::Future {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -55,6 +69,11 @@ impl
         let mut node = node.lock().unwrap();
         let (txn, msg_id) = match request.body {
             Request::Txn { msg_id, txn } => (txn, msg_id),
+        };
+        let msg = Message {
+            src: node.id.clone(),
+            dest: "lin-kv".to_string(),
+            body: todo!(),
         };
         let txn = txn
             .into_iter()

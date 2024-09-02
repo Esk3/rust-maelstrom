@@ -10,8 +10,10 @@ async fn main() {
 
 #[derive(Clone)]
 pub struct Handler;
-impl Service<rust_maelstrom::handler::RequestArgs<Message<MessageRequest>, MessageResponse, EchoNode>>
-    for Handler
+impl
+    Service<
+        rust_maelstrom::handler::RequestArgs<Message<MessageRequest>, MessageResponse, EchoNode>,
+    > for Handler
 {
     type Response = MessageResponse;
 
