@@ -1,6 +1,7 @@
-use handler::{HandlerRequest, HandlerResponse, RequestArgs};
+use core::panic;
+use handler::{HandlerRequest, HandlerResponse};
 use input::{InputHandler, InputResponse};
-use message::{InitRequest, InitResponse, Message, PeerMessage};
+use message::{InitRequest, InitResponse, Message};
 use serde::{de::DeserializeOwned, Serialize};
 use service::Service;
 use std::{collections::HashMap, fmt::Debug, io::Write};
@@ -11,21 +12,36 @@ pub mod input;
 pub mod message;
 pub mod service;
 
-pub struct MainLoop<I, R> {
+pub struct MainLoop<I, R, E> {
     pub input_handler: I,
     pub request_handler: R,
+    pub event_handler: Option<E>,
 }
 
-impl<R, Req, Res> MainLoop<InputHandler<Req, Res>, R> {
+impl<R, Req, Res> MainLoop<InputHandler<Req, Res>, R, ()> {
     pub fn new(request_handler: R) -> Self {
         Self {
             input_handler: InputHandler::new(),
             request_handler,
+            event_handler: None,
         }
     }
 }
 
-impl<I, R> MainLoop<I, R> {
+impl<T> service::Service<Event<T>> for ()
+where
+    T: Send + 'static,
+{
+    type Response = Event<T>;
+
+    type Future = Fut<Self::Response>;
+
+    fn call(&mut self, request: Event<T>) -> Self::Future {
+        Box::pin(async move { Ok(request) })
+    }
+}
+
+impl<I, R, E> MainLoop<I, R, E> {
     pub async fn run<N, Req, Res>(self)
     where
         R: Service<HandlerRequest<Req, Res, N>, Response = Message<HandlerResponse<Res>>>
@@ -33,6 +49,7 @@ impl<I, R> MainLoop<I, R> {
             + 'static
             + Send,
         I: Service<String, Response = InputResponse<Req, Res>>,
+        E: Service<Event<Req>, Response = Event<Req>>,
         N: Node + 'static + Debug + Send,
         Req: DeserializeOwned + 'static + Debug + Send,
         Res: Serialize + DeserializeOwned + Debug + Send + 'static + Debug,
@@ -66,6 +83,7 @@ impl<I, R> MainLoop<I, R> {
         let mut id = 0;
         let mut set = tokio::task::JoinSet::new();
         let mut channels = HashMap::new();
+        // let mut event_handler = EventHandler::new();
         loop {
             tokio::select! {
                 line = lines.next_line() => {
@@ -109,4 +127,46 @@ pub type Fut<T> = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Res
 
 pub trait Node {
     fn init(node_id: String, node_ids: Vec<String>) -> Self;
+}
+
+pub struct EventMiddleware {}
+impl EventMiddleware {
+    fn call(&mut self, request: Event<()>) -> Event<()> {
+        request
+    }
+}
+
+pub struct EventHandler<T> {
+    subscribers: HashMap<usize, tokio::sync::oneshot::Sender<Message<T>>>,
+}
+
+impl<T> EventHandler<T>
+where
+    T: Debug,
+{
+    pub fn new() -> Self {
+        todo!()
+    }
+    pub fn subscribe(&mut self) {}
+    pub fn unsubscribe(&mut self) {}
+    pub fn handle_event(&mut self, event: Event<T>) -> Option<Event<T>> {
+        match event {
+            Event::NetworkMessage(_) => Some(event),
+            Event::Internal { id, message } => {
+                if let Some(consumer) = self.subscribers.remove(&id) {
+                    consumer.send(message).unwrap();
+                    None
+                } else {
+                    todo!(
+                        "return event, problem is checking if id exsist in subs without moving msg"
+                    )
+                }
+            }
+        }
+    }
+}
+
+pub enum Event<T> {
+    NetworkMessage(Message<T>),
+    Internal { id: usize, message: Message<T> },
 }
