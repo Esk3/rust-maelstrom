@@ -60,10 +60,7 @@ where
         set.spawn(async move { self.handler.call(input).await });
 
         let result = set.join_next().await;
-        match result.unwrap().unwrap().unwrap() {
-            HandlerResponse::Response(res) => res.send(std::io::stdout()),
-            HandlerResponse::Event(event) => event_broker.publish_event(event),
-        }
+        Self::handle_output(result.unwrap().unwrap().unwrap(), &event_broker);
     }
     fn handle_input<T, N, Res>(
         mut self,
@@ -88,7 +85,18 @@ where
 
         set.spawn(async move { self.handler.call(input).await });
     }
-    fn handle_output() {}
+    fn handle_output<Res, T>(
+        handler_response: HandlerResponse<Message<Res>, T>,
+        event_broker: &EventBroker<T>,
+    ) where
+        T: Debug + Send + 'static,
+        Res: Serialize,
+    {
+        match handler_response {
+            HandlerResponse::Response(response) => response.send(std::io::stdout().lock()),
+            HandlerResponse::Event(event) => event_broker.publish_event(event),
+        }
+    }
     async fn init<N>() -> N
     where
         N: Node,
