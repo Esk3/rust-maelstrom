@@ -1,4 +1,10 @@
-use serde::{de::DeserializeOwned, Deserialize};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    sync::{Arc, Mutex},
+};
+
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{message::Message, service::Service, Fut};
 
@@ -12,11 +18,11 @@ impl<H> Server<H> {
         H: crate::service::Service<Message<T>, Response = HandlerResponse<Message<Res>, T>>
             + Send
             + 'static,
-        T: DeserializeOwned + Send + 'static,
-        Res: Send + 'static,
+        T: Serialize + DeserializeOwned + Send + 'static + Debug,
+        Res: Serialize + Send + 'static,
     {
         Self::init();
-        let mut event_broker = EventBroker::new();
+        let event_broker = EventBroker::new();
 
         let input = std::io::stdin().lines().next().unwrap().unwrap();
 
@@ -28,22 +34,15 @@ impl<H> Server<H> {
 
         let result = set.join_next().await;
         match result.unwrap().unwrap().unwrap() {
-            HandlerResponse::Response(_) => todo!("send reply"),
+            HandlerResponse::Response(res) => res.send(std::io::stdout()),
             HandlerResponse::Event(event) => event_broker.publish_event(event),
         }
-
-        // get input
-        // get event from input
-        // send event to handler
-        // get event or response from handler
-        // if response send response
-        // else if event send to event broker
     }
     fn init() {}
 }
 
 #[derive(Debug, Deserialize)]
-enum Event<T> {
+pub enum Event<T> {
     Maelstrom { dest: usize, body: Message<T> },
     Injected { dest: usize, body: Message<T> },
 }
@@ -52,14 +51,46 @@ pub enum HandlerResponse<Res, T> {
     Response(Res),
     Event(Event<T>),
 }
+#[derive(Debug, Clone)]
 struct EventBroker<T> {
-    t: std::marker::PhantomData<T>,
+    new_ids_tx:
+        tokio::sync::mpsc::UnboundedSender<(usize, tokio::sync::oneshot::Sender<Message<T>>)>,
+    events_tx: tokio::sync::mpsc::UnboundedSender<Event<T>>,
 }
-impl<T> EventBroker<T> {
+impl<T> EventBroker<T>
+where
+    T: Debug + Send + 'static,
+{
     pub fn new() -> Self {
-        todo!();
+        let (new_ids_tx, mut new_ids_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscribers = HashMap::<usize, tokio::sync::oneshot::Sender<Message<T>>>::new();
+        tokio::spawn(async move {
+            let (id, tx) = new_ids_rx.recv().await.unwrap();
+            subscribers.insert(id, tx);
+
+            let event = events_rx.recv().await.unwrap();
+            let (id, body) = match event {
+                Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
+            };
+            let Some(tx) = subscribers.remove(&id) else {
+                return;
+            };
+            tx.send(body).unwrap();
+        });
+        Self {
+            new_ids_tx,
+            events_tx,
+        }
     }
-    pub fn publish_event(&mut self, event: T) {}
+    pub fn subscribe(&self, id: usize) -> tokio::sync::oneshot::Receiver<Message<T>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.new_ids_tx.send((id, tx));
+        rx
+    }
+    pub fn publish_event(&self, event: Event<T>) {
+        self.events_tx.send(event);
+    }
 }
 
 struct TestHandler;
@@ -81,7 +112,7 @@ impl Service<Message<MyT>> for TestHandler {
         todo!()
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum MyT {
     Echo { echo: String },
