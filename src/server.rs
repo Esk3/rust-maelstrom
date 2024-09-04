@@ -22,6 +22,9 @@ impl<H> Server<H>
 where
     H: Clone,
 {
+    pub fn new(handler: H) -> Self {
+        Self { handler }
+    }
     pub async fn run<T, Res, N>(self)
     where
         H: crate::service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
@@ -223,7 +226,7 @@ async fn test() {
     s.run().await;
 }
 pub struct HandlerInput<T, N> {
-    message: Message<T>,
-    node: Arc<Mutex<N>>,
-    event_broker: EventBroker<T>,
+    pub message: Message<T>,
+    pub node: Arc<Mutex<N>>,
+    pub event_broker: EventBroker<T>,
 }

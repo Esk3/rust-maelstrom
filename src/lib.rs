@@ -11,6 +11,7 @@ pub mod handler;
 pub mod input;
 pub mod message;
 pub mod service;
+pub mod server;
 
 pub struct MainLoop<I, R, E> {
     pub input_handler: I,

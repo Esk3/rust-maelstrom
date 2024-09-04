@@ -5,35 +5,31 @@ use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    let main_loop = MainLoop::new(rust_maelstrom::handler::Handler::new(Handler));
-    main_loop.run().await;
+    let s = rust_maelstrom::server::Server::new(Handler);
+    s.run().await;
 }
 
 #[derive(Clone)]
 pub struct Handler;
-impl
-    Service<
-        rust_maelstrom::handler::RequestArgs<Message<MessageRequest>, MessageResponse, EchoNode>,
-    > for Handler
-{
-    type Response = MessageResponse;
+impl Service<rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>> for Handler {
+    type Response =
+        rust_maelstrom::server::HandlerResponse<Message<MessageResponse>, MessageRequest>;
 
     type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
 
     fn call(
         &mut self,
-        rust_maelstrom::handler::RequestArgs { request, .. }: rust_maelstrom::handler::RequestArgs<
-            Message<MessageRequest>,
-            MessageResponse,
-            EchoNode,
-        >,
+        request: rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>,
     ) -> Self::Future {
-        match request.body {
+        let (msg, body) = request.message.into_reply();
+        match body {
             MessageRequest::Echo { echo, msg_id } => Box::pin(async move {
-                Ok(MessageResponse::EchoOk {
-                    echo,
-                    in_reply_to: msg_id,
-                })
+                Ok(rust_maelstrom::server::HandlerResponse::Response(
+                    msg.with_body(MessageResponse::EchoOk {
+                        echo,
+                        in_reply_to: msg_id,
+                    }),
+                ))
             }),
         }
     }
@@ -50,7 +46,7 @@ impl Node for EchoNode {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageRequest {
     Echo {

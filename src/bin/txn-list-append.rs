@@ -11,13 +11,13 @@ use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    let main_loop = MainLoop {
-        request_handler: rust_maelstrom::handler::Handler::new(Handler),
-        input_handler: InputHandler {
-            inner: rust_maelstrom::input::InputHandler::new(),
-        },
-    };
-    main_loop.run().await;
+    // let main_loop = MainLoop {
+    //     request_handler: rust_maelstrom::handler::Handler::new(Handler),
+    //     input_handler: InputHandler {
+    //         inner: rust_maelstrom::input::InputHandler::new(),
+    //     },
+    // };
+    // main_loop.run().await;
 }
 #[derive(Debug, Clone)]
 struct InputHandler {
@@ -44,7 +44,10 @@ impl rust_maelstrom::service::Service<String> for InputHandler {
                             src: 1,
                             dest: None,
                             id: in_reply_to,
-                            body: Response::TxnOk { in_reply_to: 1, txn: Vec::new() },
+                            body: Response::TxnOk {
+                                in_reply_to: 1,
+                                txn: Vec::new(),
+                            },
                         }),
                     })
                 } else {
