@@ -22,7 +22,7 @@ impl<H> Server<H>
 where
     H: Clone,
 {
-    pub async fn run<T, Res, N>(mut self)
+    pub async fn run<T, Res, N>(self)
     where
         H: crate::service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
             + Send
@@ -33,38 +33,28 @@ where
     {
         let node = Self::init().await;
         let node = std::sync::Arc::new(std::sync::Mutex::new(node));
+
         let event_broker = EventBroker::new();
 
         let input = tokio::io::stdin();
         let mut lines = tokio::io::BufReader::new(input).lines();
-        let line = lines.next_line().await;
+
         let mut set = tokio::task::JoinSet::new();
 
-        self.clone().handle_input(
-            line.unwrap().unwrap(),
-            node.clone(),
-            event_broker.clone(),
-            &mut set,
-        );
-
-        let input = std::io::stdin().lines().next().unwrap().unwrap();
-
-        let input = serde_json::from_str::<Message<T>>(&input).unwrap();
-
-        let input = HandlerInput {
-            message: input,
-            node: node.clone(),
-            event_broker: event_broker.clone(),
-        };
-
-        set.spawn(async move { self.handler.call(input).await });
-
-        let result = set.join_next().await;
-        Self::handle_output(result.unwrap().unwrap().unwrap(), &event_broker);
+        loop {
+            tokio::select! {
+                line = lines.next_line() => {
+                    self.clone().handle_input(&line.unwrap().unwrap(), node.clone(), event_broker.clone(), &mut set);
+                },
+                Some(response) = set.join_next() => {
+                    Self::handle_output(response.unwrap().unwrap(), &event_broker);
+                }
+            }
+        }
     }
     fn handle_input<T, N, Res>(
         mut self,
-        line: String,
+        line: &str,
         node: Arc<Mutex<N>>,
         event_broker: EventBroker<T>,
         set: &mut tokio::task::JoinSet<anyhow::Result<HandlerResponse<Message<Res>, T>>>,
@@ -76,7 +66,7 @@ where
         T: DeserializeOwned + Send + 'static,
         Res: Send + 'static,
     {
-        let input = serde_json::from_str::<Message<T>>(&line).unwrap();
+        let input = serde_json::from_str::<Message<T>>(line).unwrap();
         let input = HandlerInput {
             message: input,
             node,
