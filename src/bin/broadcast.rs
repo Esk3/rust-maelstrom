@@ -1,37 +1,36 @@
-use std::{collections::HashMap, future::Future, pin::Pin};
+use std::{collections::HashMap};
 
 use rust_maelstrom::{
     message::{send_messages_with_retry, Message, PeerMessage},
     service::Service,
-    MainLoop, Node,
+    Fut, Node,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    let main_loop = MainLoop::new(rust_maelstrom::handler::Handler::new(Handler));
-    main_loop.run().await;
+    let s = rust_maelstrom::server::Server::new(Handler);
+    s.run().await;
 }
 
 #[derive(Clone)]
 struct Handler;
-impl Service<rust_maelstrom::handler::RequestArgs<Message<Request>, Response, BroadcastNode>>
-    for Handler
-{
-    type Response = Response;
+impl Service<rust_maelstrom::server::HandlerInput<Request, BroadcastNode>> for Handler {
+    type Response = rust_maelstrom::server::HandlerResponse<Message<Response>, Request>;
 
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
+    type Future = Fut<Self::Response>;
 
     fn call(
         &mut self,
-        rust_maelstrom::handler::RequestArgs {
-            request,
+        rust_maelstrom::server::HandlerInput {
+            message,
             node,
-            id,
-            input,
-        }: rust_maelstrom::handler::RequestArgs<Message<Request>, Response, BroadcastNode>,
+            event_broker,
+        }: rust_maelstrom::server::HandlerInput<Request, BroadcastNode>,
     ) -> Self::Future {
-        match request.body {
+        let src = message.src.clone();
+        let (reply, body) = message.into_reply();
+        match body {
             Request::Topology {
                 mut topology,
                 msg_id,
@@ -41,26 +40,30 @@ impl Service<rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Br
                     let neighbors = topology.remove(&node.id).unwrap();
                     node.neighbors = neighbors;
                 }
-                Ok(Response::TopologyOk {
+                Ok(rust_maelstrom::server::HandlerResponse::Response(reply.with_body(Response::TopologyOk {
                     in_reply_to: msg_id,
-                })
+                })))
             }),
             Request::Broadcast { message, msg_id } => Box::pin(async move {
                 let messages = {
                     let mut node = node.lock().unwrap();
-                    let Some(messages) = node.broadcast(&message, id, &request.src, msg_id) else {
-                        return Ok(Response::BroadcastOk {
-                            in_reply_to: msg_id,
-                        });
+                    let Some(messages) = node.broadcast(&message, 1, &src, msg_id) else {
+                        return Ok(rust_maelstrom::server::HandlerResponse::Response(
+                            reply.with_body(Response::BroadcastOk {
+                                in_reply_to: msg_id,
+                            }),
+                        ));
                     };
                     messages
                 };
 
-                send_messages_with_retry(messages, std::time::Duration::from_millis(100), input)
+                send_messages_with_retry(messages, std::time::Duration::from_millis(100), event_broker)
                     .await;
-                Ok(Response::BroadcastOk {
-                    in_reply_to: msg_id,
-                })
+                Ok(rust_maelstrom::server::HandlerResponse::Response(
+                    reply.with_body(Response::BroadcastOk {
+                        in_reply_to: msg_id,
+                    }),
+                ))
             }),
             Request::Read { msg_id } => Box::pin(async move {
                 let messages = {
@@ -71,7 +74,7 @@ impl Service<rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Br
                     messages,
                     in_reply_to: msg_id,
                 };
-                Ok(body)
+                Ok(rust_maelstrom::server::HandlerResponse::Response(reply.with_body(body)))
             }),
         }
     }
@@ -130,7 +133,7 @@ impl BroadcastNode {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     Topology {
@@ -144,6 +147,15 @@ pub enum Request {
     Read {
         msg_id: usize,
     },
+}
+impl rust_maelstrom::message::MessageId for Request {
+    fn get_id(&self) -> usize {
+        match self {
+            Request::Topology { msg_id, .. }
+            | Request::Broadcast { msg_id, .. }
+            | Request::Read { msg_id } => *msg_id,
+        }
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

@@ -2,11 +2,17 @@ use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
+use crate::server::EventBroker;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message<T> {
     pub src: String,
     pub dest: String,
     pub body: T,
+}
+
+pub trait MessageId: Serialize + Debug {
+    fn get_id(&self) -> usize;
 }
 
 impl<T> Message<T> {
@@ -60,14 +66,12 @@ pub enum MessageType<M, P, R> {
     Response(Message<PeerMessage<R>>),
 }
 
-
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Request<M, P> {
     Maelstrom(Message<M>),
     Peer(Message<PeerMessage<P>>),
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PeerMessage<T> {
@@ -114,15 +118,22 @@ impl<T> PeerMessage<T> {
     }
 }
 
-pub async fn send_messages_with_retry<T, B: Debug>(
+pub async fn send_messages_with_retry<T>(
     mut messages: Vec<Message<PeerMessage<T>>>,
     interval: std::time::Duration,
-    mut input: tokio::sync::mpsc::UnboundedReceiver<Message<PeerMessage<B>>>,
+    event_broker: EventBroker<T>,
 ) where
-    T: Serialize,
+    T: MessageId + Send + 'static,
 {
     let mut interval = tokio::time::interval(interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut set = tokio::task::JoinSet::new();
+    messages
+        .iter()
+        .map(|message| event_broker.subscribe(message.body.body.get_id()))
+        .for_each(|c| {
+            set.spawn(c);
+        });
     while !messages.is_empty() {
         tokio::select! {
             _ = interval.tick() => {
@@ -131,9 +142,9 @@ pub async fn send_messages_with_retry<T, B: Debug>(
                     message.send(&mut out);
                 }
             },
-            Some(response) = input.recv() => {
-                dbg!(&response);
-                messages.retain(|message| !message.body.matches_response(&response));
+            Some(response) = set.join_next() => {
+                let response = response.unwrap().unwrap();
+                messages.retain(|message| message.body.body.get_id() != response.body.get_id());
             }
         }
     }

@@ -1,4 +1,3 @@
-use core::panic;
 use handler::{HandlerRequest, HandlerResponse};
 use input::{InputHandler, InputResponse};
 use message::{InitRequest, InitResponse, Message};
@@ -10,8 +9,8 @@ use tokio::io::AsyncBufReadExt;
 pub mod handler;
 pub mod input;
 pub mod message;
-pub mod service;
 pub mod server;
+pub mod service;
 
 pub struct MainLoop<I, R, E> {
     pub input_handler: I,
@@ -84,7 +83,6 @@ impl<I, R, E> MainLoop<I, R, E> {
         let mut id = 0;
         let mut set = tokio::task::JoinSet::new();
         let mut channels = HashMap::new();
-        // let mut event_handler = EventHandler::new();
         loop {
             tokio::select! {
                 line = lines.next_line() => {

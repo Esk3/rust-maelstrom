@@ -88,6 +88,7 @@ where
         match handler_response {
             HandlerResponse::Response(response) => response.send(std::io::stdout().lock()),
             HandlerResponse::Event(event) => event_broker.publish_event(event),
+            HandlerResponse::None => (),
         }
     }
     async fn init<N>() -> N
@@ -130,6 +131,7 @@ pub enum Event<T> {
 pub enum HandlerResponse<Res, T> {
     Response(Res),
     Event(Event<T>),
+    None,
 }
 #[derive(Debug, Clone)]
 pub struct EventBroker<T> {
