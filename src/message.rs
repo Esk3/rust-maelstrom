@@ -119,7 +119,7 @@ impl<T> PeerMessage<T> {
 }
 
 pub async fn send_messages_with_retry<T>(
-    mut messages: Vec<Message<PeerMessage<T>>>,
+    mut messages: Vec<Message<T>>,
     interval: std::time::Duration,
     event_broker: EventBroker<T>,
 ) where
@@ -130,7 +130,7 @@ pub async fn send_messages_with_retry<T>(
     let mut set = tokio::task::JoinSet::new();
     messages
         .iter()
-        .map(|message| event_broker.subscribe(message.body.body.get_id()))
+        .map(|message| event_broker.subscribe(message.body.get_id()))
         .for_each(|c| {
             set.spawn(c);
         });
@@ -144,7 +144,7 @@ pub async fn send_messages_with_retry<T>(
             },
             Some(response) = set.join_next() => {
                 let response = response.unwrap().unwrap();
-                messages.retain(|message| message.body.body.get_id() != response.body.get_id());
+                messages.retain(|message| message.body.get_id() != response.body.get_id());
             }
         }
     }

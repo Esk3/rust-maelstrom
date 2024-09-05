@@ -1,9 +1,7 @@
 use std::{collections::HashMap};
 
 use rust_maelstrom::{
-    message::{send_messages_with_retry, Message, PeerMessage},
-    service::Service,
-    Fut, Node,
+    message::{send_messages_with_retry, Message, PeerMessage}, service::Service, Fut, Ids, Node
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,7 +35,7 @@ impl Service<rust_maelstrom::server::HandlerInput<Request, BroadcastNode>> for H
             } => Box::pin(async move {
                 {
                     let mut node = node.lock().unwrap();
-                    let neighbors = topology.remove(&node.id).unwrap();
+                    let neighbors = topology.remove(&node.node_id).unwrap();
                     node.neighbors = neighbors;
                 }
                 Ok(rust_maelstrom::server::HandlerResponse::Response(reply.with_body(Response::TopologyOk {
@@ -47,7 +45,7 @@ impl Service<rust_maelstrom::server::HandlerInput<Request, BroadcastNode>> for H
             Request::Broadcast { message, msg_id } => Box::pin(async move {
                 let messages = {
                     let mut node = node.lock().unwrap();
-                    let Some(messages) = node.broadcast(&message, 1, &src, msg_id) else {
+                    let Some(messages) = node.broadcast(&message, &src) else {
                         return Ok(rust_maelstrom::server::HandlerResponse::Response(
                             reply.with_body(Response::BroadcastOk {
                                 in_reply_to: msg_id,
@@ -82,16 +80,19 @@ impl Service<rust_maelstrom::server::HandlerInput<Request, BroadcastNode>> for H
 
 #[derive(Debug)]
 pub struct BroadcastNode {
-    id: String,
+    node_id: String,
     neighbors: Vec<String>,
     messages: Vec<serde_json::Value>,
+    id_generator: Ids,
+
 }
 impl Node for BroadcastNode {
     fn init(node_id: String, _node_ids: Vec<String>) -> Self {
         Self {
-            id: node_id,
+            node_id,
             neighbors: Vec::new(),
             messages: Vec::new(),
+            id_generator: Ids::new(),
         }
     }
 }
@@ -100,10 +101,8 @@ impl BroadcastNode {
     pub fn broadcast(
         &mut self,
         message: &serde_json::Value,
-        id: usize,
         src: &str,
-        msg_id: usize,
-    ) -> Option<Vec<Message<PeerMessage<Request>>>> {
+    ) -> Option<Vec<Message<Request>>> {
         if self.messages.contains(message) {
             return None;
         }
@@ -115,17 +114,12 @@ impl BroadcastNode {
             .into_iter()
             .filter(|neighbor| neighbor != src)
             .enumerate()
-            .map(|(i, neighbor)| Message {
-                src: self.id.clone(),
+            .map(|(_i, neighbor)| Message {
+                src: self.node_id.clone(),
                 dest: neighbor,
-                body: PeerMessage {
-                    src: id,
-                    dest: None,
-                    id: i,
-                    body: Request::Broadcast {
+                body: Request::Broadcast {
                         message: message.clone(),
-                        msg_id,
-                    },
+                        msg_id: self.id_generator.next_id(),
                 },
             })
             .collect();

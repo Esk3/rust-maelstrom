@@ -3,7 +3,12 @@ use input::{InputHandler, InputResponse};
 use message::{InitRequest, InitResponse, Message};
 use serde::{de::DeserializeOwned, Serialize};
 use service::Service;
-use std::{collections::HashMap, fmt::Debug, io::Write};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    io::Write,
+    sync::{Arc, Mutex},
+};
 
 use tokio::io::AsyncBufReadExt;
 pub mod handler;
@@ -11,6 +16,22 @@ pub mod input;
 pub mod message;
 pub mod server;
 pub mod service;
+
+#[derive(Debug, Clone)]
+pub struct Ids(Arc<Mutex<usize>>);
+
+impl Ids {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(0)))
+    }
+    #[must_use]
+    pub fn next_id(&self) -> usize {
+        let mut lock = self.0.lock().unwrap();
+        *lock += 1;
+        *lock
+    }
+}
 
 pub struct MainLoop<I, R, E> {
     pub input_handler: I,
