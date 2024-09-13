@@ -11,11 +11,13 @@ use std::{
 };
 
 use tokio::io::AsyncBufReadExt;
+
 pub mod handler;
 pub mod input;
 pub mod message;
 pub mod server;
 pub mod service;
+pub mod error;
 
 #[derive(Debug, Clone)]
 pub struct Ids(Arc<Mutex<usize>>);
