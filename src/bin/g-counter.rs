@@ -73,7 +73,7 @@ impl Service<rust_maelstrom::handler::RequestArgs<Message<GRequest>, GResponse, 
                         .filter(|n| n.as_str() != node.id)
                         .filter(|n| n.as_str() != request.request.src)
                     {
-                        dbg!(Message {
+                        Message {
                             src: node.id.clone(),
                             dest: nei.clone(),
                             body: PeerMessage {
@@ -86,8 +86,8 @@ impl Service<rust_maelstrom::handler::RequestArgs<Message<GRequest>, GResponse, 
                                     uuid: Some(uuid.clone()),
                                 },
                             },
-                        })
-                        .send(&mut out);
+                        }
+                        .send(&mut out)?;
                     }
                 }
                 Ok(GResponse::AddOk {

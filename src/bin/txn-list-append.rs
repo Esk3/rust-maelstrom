@@ -1,14 +1,17 @@
 use rust_maelstrom::{
+    error::{self, Error},
+    event::EventBroker,
     message::Message,
-    server::{EventBroker, HandlerInput, HandlerResponse, Server},
+    server::{HandlerInput, HandlerResponse, Server},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let server = Server::new(Handler);
-    server.run().await;
+    server.run().await?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -88,7 +91,8 @@ async fn handle_txn(
                     ids.clone(),
                     event_broker.clone(),
                 )
-                .await;
+                .await
+                .unwrap();
                 result.push(Txn::Read(r, key, Some(value)));
             }
             Txn::Append(a, key, new_value) => {
@@ -98,7 +102,8 @@ async fn handle_txn(
                     ids.clone(),
                     event_broker.clone(),
                 )
-                .await;
+                .await
+                .unwrap();
                 values.push(new_value.clone());
                 LinKv::write(
                     key.clone(),
@@ -107,7 +112,8 @@ async fn handle_txn(
                     ids.clone(),
                     event_broker.clone(),
                 )
-                .await;
+                .await
+                .unwrap();
                 result.push(Txn::Append(a, key, new_value));
             }
         }
@@ -157,7 +163,7 @@ impl LinKv {
         node_id: String,
         ids: IdGenerator,
         event_broker: EventBroker<Input>,
-    ) -> Vec<serde_json::Value> {
+    ) -> Result<Vec<serde_json::Value>, error::Error> {
         let msg_id = ids.get_id();
         let message = Message {
             src: node_id.clone(),
@@ -168,16 +174,21 @@ impl LinKv {
             },
         };
         let listner = event_broker.subscribe(msg_id);
-        message.send(std::io::stdout());
+        message
+            .send(std::io::stdout())
+            .map_err(|_| Error::crash(0 /* TODO msg id */))?;
         let response = listner.await.unwrap();
-        
+
         match response.body {
-            Input::ReadOk { value, in_reply_to: _ } => value,
+            Input::ReadOk {
+                value,
+                in_reply_to: _,
+            } => Ok(value),
             Input::Error { code: 20, .. } => {
                 Self::write(key, Vec::new(), node_id, ids, event_broker)
                     .await
                     .unwrap();
-                Vec::new()
+                Ok(Vec::new())
             }
             Input::Error {
                 code,
@@ -193,7 +204,7 @@ impl LinKv {
         node_id: String,
         ids: IdGenerator,
         event_broker: EventBroker<Input>,
-    ) -> Option<()> {
+    ) -> Result<(), Error> {
         let msg_id = ids.get_id();
         let message = Message {
             src: node_id,
@@ -205,9 +216,11 @@ impl LinKv {
             },
         };
         let listner = event_broker.subscribe(msg_id);
-        message.send(std::io::stdout());
-        dbg!(listner.await).unwrap();
-        Some(())
+        message
+            .send(std::io::stdout())
+            .map_err(|_| Error::crash(0 /* TODO msg id*/))?;
+        listner.await.unwrap();
+        Ok(())
     }
 }
 

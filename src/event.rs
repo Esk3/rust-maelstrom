@@ -1,39 +1,67 @@
-use std::collections::HashMap;
-use std::fmt::Debug;
+use anyhow::bail;
+use std::{collections::HashMap, fmt::Debug};
 
-use crate::message::Message;
+use crate::{message::Message, server::Event};
 
-pub struct EventHandler<T> {
-    subscribers: HashMap<usize, tokio::sync::oneshot::Sender<Message<T>>>,
+#[derive(Debug, Clone)]
+pub struct EventBroker<T> {
+    new_ids_tx:
+        tokio::sync::mpsc::UnboundedSender<(usize, tokio::sync::oneshot::Sender<Message<T>>)>,
+    events_tx: tokio::sync::mpsc::UnboundedSender<Event<T>>,
 }
-
-impl<T> EventHandler<T>
+impl<T> EventBroker<T>
 where
-    T: Debug,
+    T: Debug + Send + 'static,
 {
+    #[must_use]
     pub fn new() -> Self {
-        todo!()
-    }
-    pub fn subscribe(&mut self) {}
-    pub fn unsubscribe(&mut self) {}
-    pub fn handle_event(&mut self, event: Event<T>) -> Option<Event<T>> {
-        match event {
-            Event::NetworkMessage(_) => Some(event),
-            Event::Internal { id, message } => {
-                if let Some(consumer) = self.subscribers.remove(&id) {
-                    consumer.send(message).unwrap();
-                    None
-                } else {
-                    todo!(
-                        "return event, problem is checking if id exsist in subs without moving msg"
-                    )
+        let (new_ids_tx, mut new_ids_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscribers = HashMap::<usize, tokio::sync::oneshot::Sender<Message<T>>>::new();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    msg = new_ids_rx.recv() => {
+                        let (id, tx) = msg.unwrap();
+                        subscribers.insert(id, tx);
+                    },
+                    event = events_rx.recv() => {
+                        dbg!(&event);
+                        let (id, body) = match event.unwrap() {
+                            Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
+                        };
+                        let Some(tx) = subscribers.remove(&id) else {
+                            return;
+                        };
+                        tx.send(body).unwrap();
+                    }
                 }
             }
+        });
+        Self {
+            new_ids_tx,
+            events_tx,
         }
+    }
+    #[must_use]
+    pub fn subscribe(&self, id: usize) -> tokio::sync::oneshot::Receiver<Message<T>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.new_ids_tx.send((id, tx)).unwrap();
+        rx
+    }
+    pub fn publish_event(&self, event: Event<T>) -> anyhow::Result<()> {
+        if let Err(e) = self.events_tx.send(event) {
+            bail!("{e}: channel error on publishing event")
+        }
+        Ok(())
     }
 }
 
-pub enum Event<T> {
-    NetworkMessage(Message<T>),
-    Internal { id: usize, message: Message<T> },
+impl<T> Default for EventBroker<T>
+where
+    T: Debug + Send + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }

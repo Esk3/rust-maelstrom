@@ -8,6 +8,17 @@ pub struct Error {
     text: String,
 }
 
+impl Error {
+    pub fn crash(msg_id: usize) -> Self {
+        Self {
+            error: ErrorTag::Error,
+            in_reply_to: msg_id,
+            code: ErrorCode::Crash,
+            text: "internal server error".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ErrorCode {
     #[serde(rename = "0")]

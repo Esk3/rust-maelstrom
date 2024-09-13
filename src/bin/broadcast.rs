@@ -5,17 +5,20 @@ use std::{
 
 use anyhow::Context;
 use rust_maelstrom::{
+    event,
+    id_counter::Ids,
     message::{send_messages_with_retry, Message},
     server,
     service::Service,
-    Fut, id_counter::Ids, Node,
+    Fut, Node,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let s = server::Server::new(Handler);
-    s.run().await;
+    s.run().await?;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -51,8 +54,11 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
                     .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
             }),
             Request::BroadcastOk { in_reply_to } => Box::pin(async move {
-                Ok(server::HandlerResponse::Event(server::Event::Injected { dest: in_reply_to, body: reply.into_reply().0.with_body(body) }))
-            })
+                Ok(server::HandlerResponse::Event(server::Event::Injected {
+                    dest: in_reply_to,
+                    body: reply.into_reply().0.with_body(body),
+                }))
+            }),
         }
     }
 }
@@ -119,7 +125,9 @@ pub enum Request {
     Read {
         msg_id: usize,
     },
-    BroadcastOk { in_reply_to: usize}
+    BroadcastOk {
+        in_reply_to: usize,
+    },
 }
 
 impl rust_maelstrom::message::MessageId for Request {
@@ -128,7 +136,7 @@ impl rust_maelstrom::message::MessageId for Request {
             Request::Topology { msg_id, .. }
             | Request::Broadcast { msg_id, .. }
             | Request::Read { msg_id } => *msg_id,
-            Request::BroadcastOk { in_reply_to } => *in_reply_to
+            Request::BroadcastOk { in_reply_to } => *in_reply_to,
         }
     }
 }
@@ -169,7 +177,7 @@ async fn broadcast(
     message: serde_json::Value,
     src: &str,
     msg_id: usize,
-    event_broker: server::EventBroker<Request>,
+    event_broker: event::EventBroker<Request>,
 ) -> anyhow::Result<Response> {
     let messages = {
         let mut node = node.lock().unwrap();
@@ -186,7 +194,7 @@ async fn broadcast(
         std::time::Duration::from_millis(100),
         event_broker,
     )
-    .await;
+    .await?;
     Ok(Response::BroadcastOk {
         in_reply_to: msg_id,
     })

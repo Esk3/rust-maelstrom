@@ -2,9 +2,10 @@ use rust_maelstrom::{message::Message, service::Service, Fut, Node};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let s = rust_maelstrom::server::Server::new(Handler);
-    s.run().await;
+    s.run().await?;
+    Ok(())
 }
 
 #[derive(Clone)]

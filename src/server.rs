@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fmt::Debug,
     sync::{Arc, Mutex},
 };
@@ -9,6 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
+    event::EventBroker,
     message::{InitRequest, Message},
     service, Node,
 };
@@ -35,7 +35,7 @@ where
         Res: Serialize + Send + 'static + Debug,
         N: Node + Send + 'static + Debug,
     {
-        let node = Self::init().await;
+        let node = Self::init().await?;
         let node = std::sync::Arc::new(std::sync::Mutex::new(node));
 
         let event_broker = EventBroker::new();
@@ -56,7 +56,7 @@ where
                 Some(response) = set.join_next() => {
                     let response = response.context("Future panicked")?
                         .context("Handler returned an error")?;
-                    Self::handle_output(response, &event_broker);
+                    Self::handle_output(response, &event_broker)?;
                 }
             }
         }
@@ -92,14 +92,15 @@ where
     fn handle_output<Res, T>(
         handler_response: HandlerResponse<Message<Res>, T>,
         event_broker: &EventBroker<T>,
-    ) where
+    ) -> anyhow::Result<()>
+    where
         T: Debug + Send + 'static,
         Res: Serialize + Debug,
     {
         match handler_response {
             HandlerResponse::Response(response) => response.send(std::io::stdout().lock()),
             HandlerResponse::Event(event) => event_broker.publish_event(event),
-            HandlerResponse::None => (),
+            HandlerResponse::None => Ok(()),
         }
     }
     async fn init<N>() -> anyhow::Result<N>
@@ -114,7 +115,8 @@ where
             .await
             .context("Failed to read init line")?
             .context("Init line missing")?;
-        let init_message: Message<InitRequest> = serde_json::from_str(&init_line).with_context(|| format!("failed to parse init line from {init_line}"))?;
+        let init_message: Message<InitRequest> = serde_json::from_str(&init_line)
+            .with_context(|| format!("failed to parse init line from {init_line}"))?;
 
         let (reply, body) = init_message.into_reply();
         let InitRequest::Init {
@@ -131,7 +133,7 @@ where
                 .with_body(crate::message::InitResponse::InitOk {
                     in_reply_to: msg_id,
                 })
-                .send(&mut output);
+                .send(&mut output)?;
         }
         Ok(node)
     }
@@ -148,65 +150,6 @@ pub enum HandlerResponse<Res, T> {
     Response(Res),
     Event(Event<T>),
     None,
-}
-#[derive(Debug, Clone)]
-pub struct EventBroker<T> {
-    new_ids_tx:
-        tokio::sync::mpsc::UnboundedSender<(usize, tokio::sync::oneshot::Sender<Message<T>>)>,
-    events_tx: tokio::sync::mpsc::UnboundedSender<Event<T>>,
-}
-impl<T> EventBroker<T>
-where
-    T: Debug + Send + 'static,
-{
-    #[must_use]
-    pub fn new() -> Self {
-        let (new_ids_tx, mut new_ids_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut subscribers = HashMap::<usize, tokio::sync::oneshot::Sender<Message<T>>>::new();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    msg = new_ids_rx.recv() => {
-                        let (id, tx) = msg.unwrap();
-                        subscribers.insert(id, tx);
-                    },
-                    event = events_rx.recv() => {
-                        dbg!(&event);
-                        let (id, body) = match event.unwrap() {
-                            Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
-                        };
-                        let Some(tx) = subscribers.remove(&id) else {
-                            return;
-                        };
-                        tx.send(body).unwrap();
-                    }
-                }
-            }
-        });
-        Self {
-            new_ids_tx,
-            events_tx,
-        }
-    }
-    #[must_use]
-    pub fn subscribe(&self, id: usize) -> tokio::sync::oneshot::Receiver<Message<T>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.new_ids_tx.send((id, tx)).unwrap();
-        rx
-    }
-    pub fn publish_event(&self, event: Event<T>) {
-        self.events_tx.send(event).unwrap();
-    }
-}
-
-impl<T> Default for EventBroker<T>
-where
-    T: Debug + Send + 'static,
-{
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 #[derive(Debug)]

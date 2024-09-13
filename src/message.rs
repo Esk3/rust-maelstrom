@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::server::EventBroker;
+use crate::event::EventBroker;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message<T> {
@@ -123,7 +123,8 @@ pub async fn send_messages_with_retry<T>(
     mut messages: Vec<Message<T>>,
     interval: std::time::Duration,
     event_broker: EventBroker<T>,
-) where
+) -> anyhow::Result<()>
+where
     T: MessageId + Send + 'static,
 {
     let mut interval = tokio::time::interval(interval);
@@ -140,7 +141,7 @@ pub async fn send_messages_with_retry<T>(
             _ = interval.tick() => {
                 let mut out = std::io::stdout().lock();
                 for message in &messages {
-                    message.send(&mut out);
+                    message.send(&mut out)?;
                 }
             },
             Some(response) = set.join_next() => {
@@ -149,6 +150,7 @@ pub async fn send_messages_with_retry<T>(
             }
         }
     }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
