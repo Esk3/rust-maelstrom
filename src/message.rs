@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::server::EventBroker;
@@ -143,7 +144,7 @@ pub async fn send_messages_with_retry<T>(
                 }
             },
             Some(response) = set.join_next() => {
-                let response = dbg!(response).unwrap().unwrap();
+                let response = dbg!(response).context("thread panicked").unwrap().context("future returned error").unwrap();
                 messages.retain(|message| message.body.get_id() != response.body.get_id());
             }
         }

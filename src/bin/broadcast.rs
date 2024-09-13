@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context;
 use rust_maelstrom::{
     message::{send_messages_with_retry, Message},
     server,
@@ -37,7 +38,6 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
         match body {
             Request::Topology { topology, msg_id } => Box::pin(async move {
                 handle_topology(node, topology, msg_id)
-                    .await
                     .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
             }),
             Request::Broadcast { message, msg_id } => Box::pin(async move {
@@ -50,6 +50,9 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
                     .await
                     .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
             }),
+            Request::BroadcastOk { in_reply_to } => Box::pin(async move {
+                Ok(server::HandlerResponse::Event(server::Event::Injected { dest: in_reply_to, body: reply.into_reply().0.with_body(body) }))
+            })
         }
     }
 }
@@ -116,6 +119,7 @@ pub enum Request {
     Read {
         msg_id: usize,
     },
+    BroadcastOk { in_reply_to: usize}
 }
 
 impl rust_maelstrom::message::MessageId for Request {
@@ -124,6 +128,7 @@ impl rust_maelstrom::message::MessageId for Request {
             Request::Topology { msg_id, .. }
             | Request::Broadcast { msg_id, .. }
             | Request::Read { msg_id } => *msg_id,
+            Request::BroadcastOk { in_reply_to } => *in_reply_to
         }
     }
 }
@@ -143,14 +148,16 @@ pub enum Response {
     },
 }
 
-async fn handle_topology(
+fn handle_topology(
     node: Arc<Mutex<BroadcastNode>>,
     mut topology: HashMap<String, Vec<String>>,
     msg_id: usize,
 ) -> anyhow::Result<Response> {
     {
         let mut node = node.lock().unwrap();
-        let neighbors = topology.remove(&node.node_id).unwrap();
+        let neighbors = topology
+            .remove(&node.node_id)
+            .context("node id not in topology")?;
         node.neighbors = neighbors;
     }
     Ok(Response::TopologyOk {
@@ -170,11 +177,6 @@ async fn broadcast(
             return Ok(Response::BroadcastOk {
                 in_reply_to: msg_id,
             });
-            // return Ok(server::HandlerResponse::Response(reply.with_body(
-            //     Response::BroadcastOk {
-            //         in_reply_to: msg_id,
-            //     },
-            // )));
         };
         messages
     };
@@ -188,11 +190,6 @@ async fn broadcast(
     Ok(Response::BroadcastOk {
         in_reply_to: msg_id,
     })
-    // Ok(server::HandlerResponse::Response(reply.with_body(
-    //     Response::BroadcastOk {
-    //         in_reply_to: msg_id,
-    //     },
-    // )))
 }
 async fn read(node: Arc<Mutex<BroadcastNode>>, msg_id: usize) -> anyhow::Result<Response> {
     let messages = {

@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 
@@ -31,8 +32,8 @@ where
             + Send
             + 'static,
         T: Serialize + DeserializeOwned + Send + 'static + Debug + Clone,
-        Res: Serialize + Send + 'static,
-        N: Node + Send + 'static,
+        Res: Serialize + Send + 'static + Debug,
+        N: Node + Send + 'static + Debug,
     {
         let node = Self::init().await;
         let node = std::sync::Arc::new(std::sync::Mutex::new(node));
@@ -47,10 +48,10 @@ where
         loop {
             tokio::select! {
                 line = lines.next_line() => {
-                    self.clone().handle_input(&line.unwrap().unwrap(), node.clone(), event_broker.clone(), &mut set);
+                    self.clone().handle_input(&dbg!(line.unwrap()).unwrap(), node.clone(), event_broker.clone(), &mut set);
                 },
                 Some(response) = set.join_next() => {
-                    Self::handle_output(response.unwrap().unwrap(), &event_broker);
+                    Self::handle_output(response.context("thread panicked").unwrap().context("handler returned error").unwrap(), &event_broker);
                 }
             }
         }
@@ -65,8 +66,8 @@ where
         H: crate::service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
             + Send
             + 'static,
-        N: Send + 'static,
-        T: DeserializeOwned + Send + 'static,
+        N: Send + 'static + Debug,
+        T: DeserializeOwned + Send + 'static + Debug,
         Res: Send + 'static,
     {
         let input = serde_json::from_str::<Message<T>>(line).unwrap();
@@ -83,9 +84,9 @@ where
         event_broker: &EventBroker<T>,
     ) where
         T: Debug + Send + 'static,
-        Res: Serialize,
+        Res: Serialize + Debug,
     {
-        match handler_response {
+        match dbg!(handler_response) {
             HandlerResponse::Response(response) => response.send(std::io::stdout().lock()),
             HandlerResponse::Event(event) => event_broker.publish_event(event),
             HandlerResponse::None => (),
@@ -128,6 +129,7 @@ pub enum Event<T> {
     Injected { dest: usize, body: Message<T> },
 }
 
+#[derive(Debug)]
 pub enum HandlerResponse<Res, T> {
     Response(Res),
     Event(Event<T>),
@@ -149,19 +151,21 @@ where
         let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut subscribers = HashMap::<usize, tokio::sync::oneshot::Sender<Message<T>>>::new();
         tokio::spawn(async move {
-            tokio::select! {
-                msg = new_ids_rx.recv() => {
-                    let (id, tx) = msg.unwrap();
-                    subscribers.insert(id, tx);
-                },
-                event = events_rx.recv() => {
-                    let (id, body) = match event.unwrap() {
-                        Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
-                    };
-                    let Some(tx) = subscribers.remove(&id) else {
-                        return;
-                    };
-                    tx.send(body).unwrap();
+            loop {
+                tokio::select! {
+                    msg = new_ids_rx.recv() => {
+                        let (id, tx) = dbg!(msg).unwrap();
+                        subscribers.insert(id, tx);
+                    },
+                    event = events_rx.recv() => {
+                        let (id, body) = match dbg!(event).unwrap() {
+                            Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
+                        };
+                        let Some(tx) = subscribers.remove(&id) else {
+                            return;
+                        };
+                        tx.send(body).unwrap();
+                    }
                 }
             }
         });
@@ -180,6 +184,15 @@ where
     pub fn publish_event(&self, event: Event<T>) {
         dbg!("new event");
         self.events_tx.send(dbg!(event)).unwrap();
+    }
+}
+
+impl<T> Default for EventBroker<T>
+where
+    T: Debug + Send + 'static,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -210,6 +223,7 @@ impl Service<HandlerInput<MyT, MyNode>> for TestHandler {
         todo!()
     }
 }
+#[derive(Debug)]
 struct MyNode;
 impl Node for MyNode {
     fn init(node_id: String, node_ids: Vec<String>) -> Self {
@@ -229,6 +243,7 @@ async fn test() {
     };
     s.run().await;
 }
+#[derive(Debug)]
 pub struct HandlerInput<T, N> {
     pub message: Message<T>,
     pub node: Arc<Mutex<N>>,
