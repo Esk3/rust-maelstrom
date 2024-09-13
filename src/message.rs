@@ -51,12 +51,12 @@ impl<T> Message<T>
 where
     T: Serialize,
 {
-    pub fn send<W>(&self, mut writer: W)
+    pub fn send<W>(&self, mut writer: W) -> anyhow::Result<()>
     where
         W: std::io::Write,
     {
-        serde_json::to_writer(&mut writer, self).unwrap();
-        writer.write_all(b"\n").unwrap();
+        serde_json::to_writer(&mut writer, self).context("Error writing to stdout")?;
+        writer.write_all(b"\n").context("Error writing to stdout")
     }
 }
 

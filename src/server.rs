@@ -10,8 +10,7 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::{
     message::{InitRequest, Message},
-    service::Service,
-    Fut, Node,
+    service, Node,
 };
 
 #[derive(Debug, Clone)]
@@ -26,9 +25,10 @@ where
     pub fn new(handler: H) -> Self {
         Self { handler }
     }
-    pub async fn run<T, Res, N>(self)
+
+    pub async fn run<T, Res, N>(self) -> anyhow::Result<()>
     where
-        H: crate::service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
+        H: service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
             + Send
             + 'static,
         T: Serialize + DeserializeOwned + Send + 'static + Debug + Clone,
@@ -48,29 +48,38 @@ where
         loop {
             tokio::select! {
                 line = lines.next_line() => {
-                    self.clone().handle_input(&line.unwrap().unwrap(), node.clone(), event_broker.clone(), &mut set);
+                    let line = line.context("Error reading line")?
+                                .context("Out of lines to read")?;
+                    self.clone()
+                        .handle_input(&line, node.clone(), event_broker.clone(), &mut set)?;
                 },
                 Some(response) = set.join_next() => {
-                    Self::handle_output(response.context("thread panicked").unwrap().context("handler returned error").unwrap(), &event_broker);
+                    let response = response.context("Future panicked")?
+                        .context("Handler returned an error")?;
+                    Self::handle_output(response, &event_broker);
                 }
             }
         }
     }
+
     fn handle_input<T, N, Res>(
         mut self,
         line: &str,
         node: Arc<Mutex<N>>,
         event_broker: EventBroker<T>,
         set: &mut tokio::task::JoinSet<anyhow::Result<HandlerResponse<Message<Res>, T>>>,
-    ) where
-        H: crate::service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
+    ) -> anyhow::Result<()>
+    where
+        H: service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
             + Send
             + 'static,
         N: Send + 'static + Debug,
         T: DeserializeOwned + Send + 'static + Debug,
         Res: Send + 'static,
     {
-        let input = serde_json::from_str::<Message<T>>(line).with_context(|| format!("found unknown input {line}")).unwrap();
+        let input = serde_json::from_str::<Message<T>>(line)
+            .with_context(|| format!("found unknown input {line}"))?;
+
         let input = HandlerInput {
             message: input,
             node,
@@ -78,6 +87,7 @@ where
         };
 
         set.spawn(async move { self.handler.call(input).await });
+        Ok(())
     }
     fn handle_output<Res, T>(
         handler_response: HandlerResponse<Message<Res>, T>,
@@ -92,15 +102,20 @@ where
             HandlerResponse::None => (),
         }
     }
-    async fn init<N>() -> N
+    async fn init<N>() -> anyhow::Result<N>
     where
         N: Node,
     {
         let stdin = tokio::io::stdin();
         let mut lines = tokio::io::BufReader::new(stdin).lines();
 
-        let init_line = lines.next_line().await.unwrap().unwrap();
-        let init_message: Message<InitRequest> = serde_json::from_str(&init_line).unwrap();
+        let init_line = lines
+            .next_line()
+            .await
+            .context("Failed to read init line")?
+            .context("Init line missing")?;
+        let init_message: Message<InitRequest> = serde_json::from_str(&init_line).with_context(|| format!("failed to parse init line from {init_line}"))?;
+
         let (reply, body) = init_message.into_reply();
         let InitRequest::Init {
             msg_id,
@@ -117,9 +132,8 @@ where
                     in_reply_to: msg_id,
                 })
                 .send(&mut output);
-            std::io::Write::flush(&mut output).unwrap();
         }
-        node
+        Ok(node)
     }
 }
 

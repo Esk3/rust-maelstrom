@@ -4,14 +4,14 @@ use rust_maelstrom::{
     handler::{Handler, RequestArgs},
     message::{Message, PeerMessage},
     service::Service,
-    MainLoop, Node,
+    Node,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    let main_loop = MainLoop::new(Handler::new(MaelstromHandler));
-    main_loop.run().await;
+    // let main_loop = MainLoop::new(Handler::new(MaelstromHandler));
+    // main_loop.run().await;
 }
 
 #[derive(Debug)]

@@ -8,7 +8,7 @@ use rust_maelstrom::{
     message::{send_messages_with_retry, Message},
     server,
     service::Service,
-    Fut, Ids, Node,
+    Fut, id_counter::Ids, Node,
 };
 use serde::{Deserialize, Serialize};
 
