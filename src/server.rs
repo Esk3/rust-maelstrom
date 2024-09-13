@@ -48,7 +48,7 @@ where
         loop {
             tokio::select! {
                 line = lines.next_line() => {
-                    self.clone().handle_input(&dbg!(line.unwrap()).unwrap(), node.clone(), event_broker.clone(), &mut set);
+                    self.clone().handle_input(&line.unwrap().unwrap(), node.clone(), event_broker.clone(), &mut set);
                 },
                 Some(response) = set.join_next() => {
                     Self::handle_output(response.context("thread panicked").unwrap().context("handler returned error").unwrap(), &event_broker);
@@ -70,7 +70,7 @@ where
         T: DeserializeOwned + Send + 'static + Debug,
         Res: Send + 'static,
     {
-        let input = serde_json::from_str::<Message<T>>(line).unwrap();
+        let input = serde_json::from_str::<Message<T>>(line).with_context(|| format!("found unknown input {line}")).unwrap();
         let input = HandlerInput {
             message: input,
             node,
@@ -86,7 +86,7 @@ where
         T: Debug + Send + 'static,
         Res: Serialize + Debug,
     {
-        match dbg!(handler_response) {
+        match handler_response {
             HandlerResponse::Response(response) => response.send(std::io::stdout().lock()),
             HandlerResponse::Event(event) => event_broker.publish_event(event),
             HandlerResponse::None => (),
@@ -154,11 +154,12 @@ where
             loop {
                 tokio::select! {
                     msg = new_ids_rx.recv() => {
-                        let (id, tx) = dbg!(msg).unwrap();
+                        let (id, tx) = msg.unwrap();
                         subscribers.insert(id, tx);
                     },
                     event = events_rx.recv() => {
-                        let (id, body) = match dbg!(event).unwrap() {
+                        dbg!(&event);
+                        let (id, body) = match event.unwrap() {
                             Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
                         };
                         let Some(tx) = subscribers.remove(&id) else {
@@ -176,14 +177,12 @@ where
     }
     #[must_use]
     pub fn subscribe(&self, id: usize) -> tokio::sync::oneshot::Receiver<Message<T>> {
-        dbg!("subscribe", id);
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.new_ids_tx.send((id, tx)).unwrap();
         rx
     }
     pub fn publish_event(&self, event: Event<T>) {
-        dbg!("new event");
-        self.events_tx.send(dbg!(event)).unwrap();
+        self.events_tx.send(event).unwrap();
     }
 }
 
@@ -196,53 +195,6 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-struct TestHandler;
-impl Service<HandlerInput<MyT, MyNode>> for TestHandler {
-    type Response = HandlerResponse<Message<()>, MyT>;
-
-    type Future = Fut<Self::Response>;
-
-    fn call(
-        &mut self,
-        HandlerInput {
-            message,
-            node,
-            event_broker,
-        }: HandlerInput<MyT, MyNode>,
-    ) -> Self::Future {
-        let (msg, body) = message.split();
-        match body {
-            MyT::Echo { echo } => todo!(),
-            MyT::Broadcast {} => todo!(),
-            MyT::BroadcastOk { msg_id } => HandlerResponse::<(), _>::Event(Event::Maelstrom {
-                dest: msg_id,
-                body: msg.with_body(MyT::BroadcastOk { msg_id }),
-            }),
-        };
-        todo!()
-    }
-}
-#[derive(Debug)]
-struct MyNode;
-impl Node for MyNode {
-    fn init(node_id: String, node_ids: Vec<String>) -> Self {
-        todo!()
-    }
-}
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-enum MyT {
-    Echo { echo: String },
-    Broadcast {},
-    BroadcastOk { msg_id: usize },
-}
-async fn test() {
-    let s = Server {
-        handler: TestHandler,
-    };
-    s.run().await;
-}
 #[derive(Debug)]
 pub struct HandlerInput<T, N> {
     pub message: Message<T>,

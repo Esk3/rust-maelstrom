@@ -1,9 +1,8 @@
 use rust_maelstrom::{
     message::Message,
     server::{EventBroker, HandlerInput, HandlerResponse, Server},
-    service,
 };
-use serde::{de::value, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -19,30 +18,25 @@ async fn main() {
 struct Node {
     id: String,
     state: HashMap<serde_json::Value, Vec<serde_json::Value>>,
+    ids: IdGenerator,
 }
 
-impl Node {
-    pub fn read(&self, key: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-        self.state.get(key)
-    }
-    pub fn append(&mut self, key: serde_json::Value, value: serde_json::Value) {
-        self.state.entry(key).or_default().push(value);
-    }
-}
+impl Node {}
 
 impl rust_maelstrom::Node for Node {
-    fn init(node_id: String, node_ids: Vec<String>) -> Self {
+    fn init(node_id: String, _node_ids: Vec<String>) -> Self {
         Self {
             id: node_id,
             state: HashMap::new(),
+            ids: IdGenerator::new(),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 struct Handler;
-impl rust_maelstrom::service::Service<HandlerInput<Request, Node>> for Handler {
-    type Response = HandlerResponse<Message<Response>, Request>;
+impl rust_maelstrom::service::Service<HandlerInput<Input, Node>> for Handler {
+    type Response = HandlerResponse<Message<Output>, Input>;
 
     type Future = rust_maelstrom::Fut<Self::Response>;
 
@@ -52,53 +46,85 @@ impl rust_maelstrom::service::Service<HandlerInput<Request, Node>> for Handler {
             message,
             node,
             event_broker,
-        }: rust_maelstrom::server::HandlerInput<Request, Node>,
+        }: rust_maelstrom::server::HandlerInput<Input, Node>,
     ) -> Self::Future {
+        dbg!(&message);
         let (reply, body) = message.into_reply();
-        Box::pin(async move {
-            match body {
-                Request::Txn { msg_id, txn } => handle_txn(node, txn, msg_id, event_broker).await,
-                Request::ReadOk { in_reply_to } => todo!(),
-                Request::WriteOk { in_reply_to } => todo!(),
-            }
-        });
-        todo!()
+        match body {
+            Input::Txn { msg_id, txn } => Box::pin(async move {
+                let txn = handle_txn(node, txn, event_broker).await;
+                dbg!(&txn);
+                Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
+                    in_reply_to: msg_id,
+                    txn,
+                })))
+            }),
+            Input::ReadOk { in_reply_to, .. }
+            | Input::WriteOk { in_reply_to }
+            | Input::Error { in_reply_to, .. } => Box::pin(async move {
+                Ok(HandlerResponse::Event(
+                    rust_maelstrom::server::Event::Injected {
+                        dest: in_reply_to,
+                        body: reply.into_reply().0.with_body(body),
+                    },
+                ))
+            }),
+        }
     }
 }
 
 async fn handle_txn(
     node: Arc<Mutex<Node>>,
     txn: Vec<Txn>,
-    msg_id: usize,
-    event_broker: EventBroker<Request>,
-) {
-    let mut node = node.lock().unwrap();
-    let result = Vec::new();
+    event_broker: EventBroker<Input>,
+) -> Vec<Txn> {
+    let node_id;
+    let ids;
+    {
+        let node = node.lock().unwrap();
+        node_id = node.id.clone();
+        ids = node.ids.clone();
+    }
+    let mut result = Vec::new();
     for op in txn {
         match op {
             Txn::Read(r, key, _) => {
-                let value = LinKv::read(key, todo!(), todo!(), event_broker).await;
+                let value = LinKv::read(
+                    key.clone(),
+                    node_id.clone(),
+                    ids.clone(),
+                    event_broker.clone(),
+                )
+                .await;
                 result.push(Txn::Read(r, key, Some(value)));
-            },
+            }
             Txn::Append(a, key, new_value) => {
-                let values = LinKv::read(key, todo!(), todo!(), event_broker).await;
-                values.push(new_value);
-                LinKv::write(key, values, todo!(), todo!(), event_broker).await;
+                let mut values = LinKv::read(
+                    key.clone(),
+                    node_id.clone(),
+                    ids.clone(),
+                    event_broker.clone(),
+                )
+                .await;
+                values.push(new_value.clone());
+                LinKv::write(
+                    key.clone(),
+                    values,
+                    node_id.clone(),
+                    ids.clone(),
+                    event_broker.clone(),
+                )
+                .await;
                 result.push(Txn::Append(a, key, new_value));
             }
         }
     }
-    // Box::pin(async move {
-    //     Ok(Response::TxnOk {
-    //         in_reply_to: msg_id,
-    //         txn,
-    //     })
-    // });
+    result
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum Request {
+enum Input {
     Txn {
         msg_id: usize,
         txn: Vec<Txn>,
@@ -112,13 +138,20 @@ enum Request {
     WriteOk {
         in_reply_to: usize,
     },
+    Error {
+        code: usize,
+        text: String,
+        in_reply_to: usize,
+    },
 }
 
-impl rust_maelstrom::message::MessageId for Request {
+impl rust_maelstrom::message::MessageId for Input {
     fn get_id(&self) -> usize {
         match self {
-            Request::Txn { msg_id, .. } => *msg_id,
-            Request::ReadOk { in_reply_to, .. } | Request::WriteOk { in_reply_to } => *in_reply_to,
+            Input::Txn { msg_id, .. } => *msg_id,
+            Input::ReadOk { in_reply_to, .. }
+            | Input::WriteOk { in_reply_to }
+            | Input::Error { in_reply_to, .. } => *in_reply_to,
         }
     }
 }
@@ -128,48 +161,84 @@ struct LinKv;
 impl LinKv {
     async fn read(
         key: serde_json::Value,
-        src: String,
-        msg_id: usize,
-        event_broker: EventBroker<Request>,
+        node_id: String,
+        ids: IdGenerator,
+        event_broker: EventBroker<Input>,
     ) -> Vec<serde_json::Value> {
+        let msg_id = ids.get_id();
         let message = Message {
-            src,
+            src: node_id.clone(),
             dest: "lin-kv".to_string(),
-            body: Response::Read { key, msg_id },
+            body: Output::Read {
+                key: key.clone(),
+                msg_id,
+            },
         };
         let listner = event_broker.subscribe(msg_id);
         message.send(std::io::stdout());
-        let Message {
-            body: Request::ReadOk { value, .. },
-            ..
-        } = listner.await.unwrap()
-        else {
-            panic!();
+        let response = listner.await.unwrap();
+        let value = match response.body {
+            Input::ReadOk { value, in_reply_to: _ } => value,
+            Input::Error { code, .. } if code == 20 => {
+                Self::write(key, Vec::new(), node_id, ids, event_broker)
+                    .await
+                    .unwrap();
+                Vec::new()
+            }
+            Input::Error {
+                code,
+                text,
+                in_reply_to: _,
+            } => panic!("error creating new key: [{code}]: {text}"),
+            Input::Txn { .. } | Input::WriteOk { .. } => panic!(),
         };
         value
     }
     async fn write(
         key: serde_json::Value,
         values: Vec<serde_json::Value>,
-        src: String,
-        msg_id: usize,
-        event_broker: EventBroker<Request>,
+        node_id: String,
+        ids: IdGenerator,
+        event_broker: EventBroker<Input>,
     ) -> Option<()> {
+        let msg_id = ids.get_id();
         let message = Message {
-            src,
+            src: node_id,
             dest: "lin-kv".to_string(),
-            body: Response::Write { key, value: values, msg_id },
+            body: Output::Write {
+                key,
+                value: serde_json::Value::Array(values),
+                msg_id,
+            },
         };
         let listner = event_broker.subscribe(msg_id);
         message.send(std::io::stdout());
-        listner.await.unwrap();
+        dbg!(listner.await).unwrap();
         Some(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct IdGenerator {
+    ids: Arc<Mutex<usize>>,
+}
+
+impl IdGenerator {
+    pub fn new() -> Self {
+        Self {
+            ids: Arc::new(Mutex::new(1000)),
+        }
+    }
+    pub fn get_id(&self) -> usize {
+        let mut lock = self.ids.lock().unwrap();
+        *lock += 1;
+        *lock
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum Response {
+enum Output {
     TxnOk {
         in_reply_to: usize,
         txn: Vec<Txn>,
