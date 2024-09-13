@@ -6,3 +6,4 @@ pub trait Service<Request> {
 
     fn call(&mut self, request: Request) -> Self::Future;
 }
+

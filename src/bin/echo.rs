@@ -1,6 +1,4 @@
-use std::{future::Future, pin::Pin};
-
-use rust_maelstrom::{message::Message, service::Service, MainLoop, Node};
+use rust_maelstrom::{message::Message, service::Service, Fut, Node};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
@@ -15,7 +13,7 @@ impl Service<rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>> for
     type Response =
         rust_maelstrom::server::HandlerResponse<Message<MessageResponse>, MessageRequest>;
 
-    type Future = Pin<Box<dyn Future<Output = anyhow::Result<Self::Response>> + Send>>;
+    type Future = Fut<Self::Response>;
 
     fn call(
         &mut self,

@@ -112,9 +112,9 @@ where
         {
             let mut output = std::io::stdout().lock();
             reply
-                .with_body(dbg!(crate::message::InitResponse::InitOk {
+                .with_body(crate::message::InitResponse::InitOk {
                     in_reply_to: msg_id,
-                }))
+                })
                 .send(&mut output);
             std::io::Write::flush(&mut output).unwrap();
         }
@@ -172,12 +172,14 @@ where
     }
     #[must_use]
     pub fn subscribe(&self, id: usize) -> tokio::sync::oneshot::Receiver<Message<T>> {
+        dbg!("subscribe", id);
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.new_ids_tx.send((id, tx)).unwrap();
         rx
     }
     pub fn publish_event(&self, event: Event<T>) {
-        self.events_tx.send(event).unwrap();
+        dbg!("new event");
+        self.events_tx.send(dbg!(event)).unwrap();
     }
 }
 

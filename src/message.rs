@@ -143,7 +143,7 @@ pub async fn send_messages_with_retry<T>(
                 }
             },
             Some(response) = set.join_next() => {
-                let response = response.unwrap().unwrap();
+                let response = dbg!(response).unwrap().unwrap();
                 messages.retain(|message| message.body.get_id() != response.body.get_id());
             }
         }
