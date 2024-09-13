@@ -3,10 +3,7 @@ use rust_maelstrom::{
     server::{EventBroker, HandlerInput, HandlerResponse, Server},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() {
@@ -17,7 +14,6 @@ async fn main() {
 #[derive(Debug)]
 struct Node {
     id: String,
-    state: HashMap<serde_json::Value, Vec<serde_json::Value>>,
     ids: IdGenerator,
 }
 
@@ -27,7 +23,6 @@ impl rust_maelstrom::Node for Node {
     fn init(node_id: String, _node_ids: Vec<String>) -> Self {
         Self {
             id: node_id,
-            state: HashMap::new(),
             ids: IdGenerator::new(),
         }
     }
@@ -48,12 +43,10 @@ impl rust_maelstrom::service::Service<HandlerInput<Input, Node>> for Handler {
             event_broker,
         }: rust_maelstrom::server::HandlerInput<Input, Node>,
     ) -> Self::Future {
-        dbg!(&message);
         let (reply, body) = message.into_reply();
         match body {
             Input::Txn { msg_id, txn } => Box::pin(async move {
                 let txn = handle_txn(node, txn, event_broker).await;
-                dbg!(&txn);
                 Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
                     in_reply_to: msg_id,
                     txn,
@@ -177,9 +170,10 @@ impl LinKv {
         let listner = event_broker.subscribe(msg_id);
         message.send(std::io::stdout());
         let response = listner.await.unwrap();
-        let value = match response.body {
+        
+        match response.body {
             Input::ReadOk { value, in_reply_to: _ } => value,
-            Input::Error { code, .. } if code == 20 => {
+            Input::Error { code: 20, .. } => {
                 Self::write(key, Vec::new(), node_id, ids, event_broker)
                     .await
                     .unwrap();
@@ -191,8 +185,7 @@ impl LinKv {
                 in_reply_to: _,
             } => panic!("error creating new key: [{code}]: {text}"),
             Input::Txn { .. } | Input::WriteOk { .. } => panic!(),
-        };
-        value
+        }
     }
     async fn write(
         key: serde_json::Value,
