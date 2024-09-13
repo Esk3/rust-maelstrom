@@ -1,7 +1,10 @@
 use std::{future::Future, pin::Pin};
 
 use rust_maelstrom::{
-    handler::{Handler, RequestArgs}, message::{Message, PeerMessage}, service::Service, MainLoop, Node
+    handler::{Handler, RequestArgs},
+    message::{Message, PeerMessage},
+    service::Service,
+    MainLoop, Node,
 };
 use serde::{Deserialize, Serialize};
 

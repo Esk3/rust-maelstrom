@@ -12,7 +12,7 @@
   scripts.maelstrom-no-build.exec = "./maelstrom/maelstrom $@";
 
   enterShell = ''
-    exec tmux
+    exec fish
   '';
 
   # https://devenv.sh/tests/

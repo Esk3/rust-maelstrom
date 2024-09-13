@@ -1,83 +1,18 @@
-use std::{collections::HashMap, future::Future, pin::Pin};
-
 use rust_maelstrom::{
-    handler::{HandlerRequest, HandlerResponse, RequestType},
-    input::InputResponse,
     message::Message,
-    service::Service,
-    Fut, MainLoop,
+    server::{EventBroker, HandlerInput, HandlerResponse, Server},
+    service,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::value, Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 #[tokio::main]
 async fn main() {
-    // let main_loop = MainLoop {
-    //     request_handler: rust_maelstrom::handler::Handler::new(Handler),
-    //     input_handler: InputHandler {
-    //         inner: rust_maelstrom::input::InputHandler::new(),
-    //     },
-    // };
-    // main_loop.run().await;
-}
-#[derive(Debug, Clone)]
-struct InputHandler {
-    inner: rust_maelstrom::input::InputHandler<Request, Response>,
-}
-impl rust_maelstrom::service::Service<String> for InputHandler {
-    type Response = InputResponse<Request, Response>;
-
-    type Future = Fut<Self::Response>;
-
-    fn call(&mut self, request: String) -> Self::Future {
-        let mut this = self.clone();
-        Box::pin(async move {
-            let response = this.inner.call(request).await?;
-            if let InputResponse::NewHandler(RequestType::Maelstrom(message)) = response {
-                if let Message {
-                    body: Request::ReadOk { in_reply_to },
-                    ..
-                } = message
-                {
-                    Ok(InputResponse::HandlerMessage {
-                        id: in_reply_to,
-                        message: message.with_body(rust_maelstrom::message::PeerMessage {
-                            src: 1,
-                            dest: None,
-                            id: in_reply_to,
-                            body: Response::TxnOk {
-                                in_reply_to: 1,
-                                txn: Vec::new(),
-                            },
-                        }),
-                    })
-                } else {
-                    Ok(InputResponse::NewHandler(RequestType::Maelstrom(message)))
-                }
-            } else {
-                Ok(response)
-            }
-        })
-    }
-}
-#[derive(Clone)]
-struct Middleware<T> {
-    inner: T,
-}
-
-impl<T> rust_maelstrom::service::Service<HandlerRequest<Request, Response, Node>> for Middleware<T>
-where
-    T: Service<
-            HandlerRequest<Request, Response, Node>,
-            Response = Message<HandlerResponse<Response>>,
-        > + 'static,
-{
-    type Response = Message<HandlerResponse<Response>>;
-
-    type Future = Fut<Self::Response>;
-
-    fn call(&mut self, request: HandlerRequest<Request, Response, Node>) -> Self::Future {
-        Box::pin(self.inner.call(request))
-    }
+    let server = Server::new(Handler);
+    server.run().await;
 }
 
 #[derive(Debug)]
@@ -106,66 +41,152 @@ impl rust_maelstrom::Node for Node {
 
 #[derive(Debug, Clone)]
 struct Handler;
-impl
-    rust_maelstrom::service::Service<
-        rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Node>,
-    > for Handler
-{
-    type Response = Response;
+impl rust_maelstrom::service::Service<HandlerInput<Request, Node>> for Handler {
+    type Response = HandlerResponse<Message<Response>, Request>;
 
     type Future = rust_maelstrom::Fut<Self::Response>;
 
     fn call(
         &mut self,
-        rust_maelstrom::handler::RequestArgs {
-            request,
+        HandlerInput {
+            message,
             node,
-            id: _,
-            input: _,
-        }: rust_maelstrom::handler::RequestArgs<Message<Request>, Response, Node>,
+            event_broker,
+        }: rust_maelstrom::server::HandlerInput<Request, Node>,
     ) -> Self::Future {
-        let mut node = node.lock().unwrap();
-        let (txn, msg_id) = match request.body {
-            Request::Txn { msg_id, txn } => (txn, msg_id),
-            Request::ReadOk { in_reply_to } => todo!(),
-        };
-        let msg = Message {
-            src: node.id.clone(),
-            dest: "lin-kv".to_string(),
-            body: todo!(),
-        };
-        let txn = txn
-            .into_iter()
-            .map(|op| match op {
-                Txn::Read(r, key, _) => {
-                    let value = node.read(&key).cloned().unwrap_or(Vec::new());
-                    Txn::Read(r, key, Some(value))
-                }
-                Txn::Append(a, key, value) => {
-                    node.append(key.clone(), value.clone());
-                    Txn::Append(a, key, value)
-                }
-            })
-            .collect();
+        let (reply, body) = message.into_reply();
         Box::pin(async move {
-            Ok(Response::TxnOk {
-                in_reply_to: msg_id,
-                txn,
-            })
-        })
+            match body {
+                Request::Txn { msg_id, txn } => handle_txn(node, txn, msg_id, event_broker).await,
+                Request::ReadOk { in_reply_to } => todo!(),
+                Request::WriteOk { in_reply_to } => todo!(),
+            }
+        });
+        todo!()
     }
 }
-#[derive(Debug, Deserialize, Clone)]
+
+async fn handle_txn(
+    node: Arc<Mutex<Node>>,
+    txn: Vec<Txn>,
+    msg_id: usize,
+    event_broker: EventBroker<Request>,
+) {
+    let mut node = node.lock().unwrap();
+    let result = Vec::new();
+    for op in txn {
+        match op {
+            Txn::Read(r, key, _) => {
+                let value = LinKv::read(key, todo!(), todo!(), event_broker).await;
+                result.push(Txn::Read(r, key, Some(value)));
+            },
+            Txn::Append(a, key, new_value) => {
+                let values = LinKv::read(key, todo!(), todo!(), event_broker).await;
+                values.push(new_value);
+                LinKv::write(key, values, todo!(), todo!(), event_broker).await;
+                result.push(Txn::Append(a, key, new_value));
+            }
+        }
+    }
+    // Box::pin(async move {
+    //     Ok(Response::TxnOk {
+    //         in_reply_to: msg_id,
+    //         txn,
+    //     })
+    // });
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
-    Txn { msg_id: usize, txn: Vec<Txn> },
-    ReadOk { in_reply_to: usize },
+    Txn {
+        msg_id: usize,
+        txn: Vec<Txn>,
+    },
+    /// lin-kv read ok
+    ReadOk {
+        value: Vec<serde_json::Value>,
+        in_reply_to: usize,
+    },
+    /// lin-kv write
+    WriteOk {
+        in_reply_to: usize,
+    },
 }
+
+impl rust_maelstrom::message::MessageId for Request {
+    fn get_id(&self) -> usize {
+        match self {
+            Request::Txn { msg_id, .. } => *msg_id,
+            Request::ReadOk { in_reply_to, .. } | Request::WriteOk { in_reply_to } => *in_reply_to,
+        }
+    }
+}
+
+struct LinKv;
+
+impl LinKv {
+    async fn read(
+        key: serde_json::Value,
+        src: String,
+        msg_id: usize,
+        event_broker: EventBroker<Request>,
+    ) -> Vec<serde_json::Value> {
+        let message = Message {
+            src,
+            dest: "lin-kv".to_string(),
+            body: Response::Read { key, msg_id },
+        };
+        let listner = event_broker.subscribe(msg_id);
+        message.send(std::io::stdout());
+        let Message {
+            body: Request::ReadOk { value, .. },
+            ..
+        } = listner.await.unwrap()
+        else {
+            panic!();
+        };
+        value
+    }
+    async fn write(
+        key: serde_json::Value,
+        values: Vec<serde_json::Value>,
+        src: String,
+        msg_id: usize,
+        event_broker: EventBroker<Request>,
+    ) -> Option<()> {
+        let message = Message {
+            src,
+            dest: "lin-kv".to_string(),
+            body: Response::Write { key, value: values, msg_id },
+        };
+        let listner = event_broker.subscribe(msg_id);
+        message.send(std::io::stdout());
+        listner.await.unwrap();
+        Some(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Response {
-    TxnOk { in_reply_to: usize, txn: Vec<Txn> },
+    TxnOk {
+        in_reply_to: usize,
+        txn: Vec<Txn>,
+    },
+    /// lin-kv read
+    Read {
+        key: serde_json::Value,
+        msg_id: usize,
+    },
+    /// lin_kv write
+    Write {
+        key: serde_json::Value,
+        value: serde_json::Value,
+        msg_id: usize,
+    },
 }
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 enum Txn {
