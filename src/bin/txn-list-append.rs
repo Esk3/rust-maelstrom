@@ -1,6 +1,7 @@
 use rust_maelstrom::{
     error::{self, Error},
     event::EventBroker,
+    id_counter::Ids,
     message::Message,
     server::{HandlerInput, HandlerResponse, Server},
 };
@@ -17,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
 #[derive(Debug)]
 struct Node {
     id: String,
-    ids: IdGenerator,
+    ids: Ids,
 }
 
 impl Node {}
@@ -26,7 +27,7 @@ impl rust_maelstrom::Node for Node {
     fn init(node_id: String, _node_ids: Vec<String>) -> Self {
         Self {
             id: node_id,
-            ids: IdGenerator::new(),
+            ids: Ids::new(),
         }
     }
 }
@@ -82,38 +83,17 @@ async fn handle_txn(
         ids = node.ids.clone();
     }
     let mut result = Vec::new();
+    let lin_kv_client = LinKv::new(node_id.clone(), ids.clone(), event_broker.clone());
     for op in txn {
         match op {
             Txn::Read(r, key, _) => {
-                let value = LinKv::read(
-                    key.clone(),
-                    node_id.clone(),
-                    ids.clone(),
-                    event_broker.clone(),
-                )
-                .await
-                .unwrap();
+                let value = lin_kv_client.read(key.clone()).await.unwrap();
                 result.push(Txn::Read(r, key, Some(value)));
             }
             Txn::Append(a, key, new_value) => {
-                let mut values = LinKv::read(
-                    key.clone(),
-                    node_id.clone(),
-                    ids.clone(),
-                    event_broker.clone(),
-                )
-                .await
-                .unwrap();
+                let mut values = lin_kv_client.read(key.clone()).await.unwrap();
                 values.push(new_value.clone());
-                LinKv::write(
-                    key.clone(),
-                    values,
-                    node_id.clone(),
-                    ids.clone(),
-                    event_broker.clone(),
-                )
-                .await
-                .unwrap();
+                lin_kv_client.write(key.clone(), values).await.unwrap();
                 result.push(Txn::Append(a, key, new_value));
             }
         }
@@ -155,25 +135,32 @@ impl rust_maelstrom::message::MessageId for Input {
     }
 }
 
-struct LinKv;
+#[derive(Debug)]
+struct LinKv {
+    node_id: String,
+    ids: Ids,
+    event_broker: EventBroker<Input>,
+}
 
 impl LinKv {
-    async fn read(
-        key: serde_json::Value,
-        node_id: String,
-        ids: IdGenerator,
-        event_broker: EventBroker<Input>,
-    ) -> Result<Vec<serde_json::Value>, error::Error> {
-        let msg_id = ids.get_id();
+    pub fn new(node_id: String, ids: Ids, event_broker: EventBroker<Input>) -> Self {
+        Self {
+            node_id,
+            ids,
+            event_broker,
+        }
+    }
+    async fn read(&self, key: serde_json::Value) -> Result<Vec<serde_json::Value>, error::Error> {
+        let msg_id = self.ids.next_id();
         let message = Message {
-            src: node_id.clone(),
+            src: self.node_id.clone(),
             dest: "lin-kv".to_string(),
             body: Output::Read {
                 key: key.clone(),
                 msg_id,
             },
         };
-        let listner = event_broker.subscribe(msg_id);
+        let listner = self.event_broker.subscribe(msg_id);
         message
             .send(std::io::stdout())
             .map_err(|_| Error::crash(0 /* TODO msg id */))?;
@@ -185,9 +172,7 @@ impl LinKv {
                 in_reply_to: _,
             } => Ok(value),
             Input::Error { code: 20, .. } => {
-                Self::write(key, Vec::new(), node_id, ids, event_broker)
-                    .await
-                    .unwrap();
+                self.write(key, Vec::new()).await.unwrap();
                 Ok(Vec::new())
             }
             Input::Error {
@@ -199,15 +184,13 @@ impl LinKv {
         }
     }
     async fn write(
+        &self,
         key: serde_json::Value,
         values: Vec<serde_json::Value>,
-        node_id: String,
-        ids: IdGenerator,
-        event_broker: EventBroker<Input>,
     ) -> Result<(), Error> {
-        let msg_id = ids.get_id();
+        let msg_id = self.ids.next_id();
         let message = Message {
-            src: node_id,
+            src: self.node_id.clone(),
             dest: "lin-kv".to_string(),
             body: Output::Write {
                 key,
@@ -215,30 +198,12 @@ impl LinKv {
                 msg_id,
             },
         };
-        let listner = event_broker.subscribe(msg_id);
+        let listner = self.event_broker.subscribe(msg_id);
         message
             .send(std::io::stdout())
             .map_err(|_| Error::crash(0 /* TODO msg id*/))?;
         listner.await.unwrap();
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-struct IdGenerator {
-    ids: Arc<Mutex<usize>>,
-}
-
-impl IdGenerator {
-    pub fn new() -> Self {
-        Self {
-            ids: Arc::new(Mutex::new(1000)),
-        }
-    }
-    pub fn get_id(&self) -> usize {
-        let mut lock = self.ids.lock().unwrap();
-        *lock += 1;
-        *lock
     }
 }
 
