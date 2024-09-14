@@ -40,7 +40,7 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
         let (reply, body) = message.into_reply();
         match body {
             Request::Topology { topology, msg_id } => Box::pin(async move {
-                handle_topology(node, topology, msg_id)
+                handle_topology(&node, topology, msg_id)
                     .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
             }),
             Request::Broadcast { message, msg_id } => Box::pin(async move {
@@ -49,9 +49,8 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
                     .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
             }),
             Request::Read { msg_id } => Box::pin(async move {
-                read(node, msg_id)
-                    .await
-                    .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
+                let body = read(&node, msg_id);
+                Ok(server::HandlerResponse::Response(reply.with_body(body)))
             }),
             Request::BroadcastOk { in_reply_to } => Box::pin(async move {
                 Ok(server::HandlerResponse::Event(server::Event::Injected {
@@ -157,7 +156,7 @@ pub enum Response {
 }
 
 fn handle_topology(
-    node: Arc<Mutex<BroadcastNode>>,
+    node: &Arc<Mutex<BroadcastNode>>,
     mut topology: HashMap<String, Vec<String>>,
     msg_id: usize,
 ) -> anyhow::Result<Response> {
@@ -199,14 +198,13 @@ async fn broadcast(
         in_reply_to: msg_id,
     })
 }
-async fn read(node: Arc<Mutex<BroadcastNode>>, msg_id: usize) -> anyhow::Result<Response> {
+fn read(node: &Arc<Mutex<BroadcastNode>>, msg_id: usize) -> Response {
     let messages = {
         let node = node.lock().unwrap();
         node.messages.clone()
     };
-    Ok(Response::ReadOk {
+    Response::ReadOk {
         messages,
         in_reply_to: msg_id,
-    })
-    // Ok(server::HandlerResponse::Response(reply.with_body(body)))
+    }
 }

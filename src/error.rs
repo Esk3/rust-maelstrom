@@ -9,6 +9,7 @@ pub struct Error {
 }
 
 impl Error {
+    #[must_use]
     pub fn crash(msg_id: usize) -> Self {
         Self {
             error: ErrorTag::Error,

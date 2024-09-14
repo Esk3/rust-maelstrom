@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use rust_maelstrom::{
-    handler::{Handler, RequestArgs},
+    handler::RequestArgs,
     message::{Message, PeerMessage},
     service::Service,
     Node,
@@ -109,6 +109,7 @@ impl Service<rust_maelstrom::handler::RequestArgs<Message<GRequest>, GResponse, 
 
 #[tokio::test]
 async fn handler_test() {
+    use rust_maelstrom::handler::Handler;
     use std::sync::{Arc, Mutex};
     let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
@@ -134,6 +135,7 @@ async fn handler_test() {
 
 #[tokio::test]
 async fn add_test() {
+    use rust_maelstrom::handler::Handler;
     use std::sync::{Arc, Mutex};
     let mut handler = Handler::new(MaelstromHandler);
     let node = GNode {
