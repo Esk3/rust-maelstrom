@@ -3,6 +3,7 @@ pub mod event;
 pub mod handler;
 pub mod id_counter;
 pub mod input;
+pub mod maelstrom_service;
 pub mod message;
 pub mod server;
 pub mod service;
