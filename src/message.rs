@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::event::EventBroker;
+use crate::event::{BuiltInEvent, EventBroker, EventId};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message<T> {
@@ -125,14 +125,14 @@ pub async fn send_messages_with_retry<T>(
     event_broker: EventBroker<T>,
 ) -> anyhow::Result<()>
 where
-    T: MessageId + Send + 'static,
+    T: EventId + Clone + Send + 'static + Debug + Serialize,
 {
     let mut interval = tokio::time::interval(interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut set = tokio::task::JoinSet::new();
     messages
         .iter()
-        .map(|message| event_broker.subscribe(message.body.get_id()))
+        .map(|message| event_broker.subscribe(message.body.get_event_id()))
         .for_each(|c| {
             set.spawn(c);
         });
@@ -146,7 +146,7 @@ where
             },
             Some(response) = set.join_next() => {
                 let response = dbg!(response).context("thread panicked").unwrap().context("future returned error").unwrap();
-                messages.retain(|message| message.body.get_id() != response.body.get_id());
+                messages.retain(|message| message.body.get_event_id() != response.id());
             }
         }
     }

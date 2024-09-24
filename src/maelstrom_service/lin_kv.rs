@@ -3,13 +3,13 @@ use std::fmt::Debug;
 use serde::{Deserialize, Serialize};
 
 use crate::error;
-use crate::event::EventBroker;
+use crate::event::{BuiltInEvent, EventBroker, EventId};
 use crate::message::Message;
 
 use crate::id_counter::Ids;
 
 #[derive(Debug)]
-struct LinKv<T> {
+pub struct LinKv<T: Clone + EventId> {
     node_id: String,
     ids: Ids,
     event_broker: EventBroker<T>,
@@ -17,7 +17,7 @@ struct LinKv<T> {
 
 impl<T> LinKv<T>
 where
-    T: Debug + Send,
+    T: Debug + Send + Clone + EventId + 'static,
 {
     pub fn new(node_id: String, ids: Ids, event_broker: EventBroker<T>) -> Self {
         Self {
@@ -26,15 +26,15 @@ where
             event_broker,
         }
     }
-    async fn read<K, V>(&self, key: serde_json::Value) -> Result<V, error::Error> {
+    pub async fn read<K, V>(&self, key: serde_json::Value) -> Result<V, error::Error> {
         let msg_id = self.ids.next_id();
         let message = Message {
             src: self.node_id.clone(),
             dest: "lin-kv".to_string(),
-            body: Output::Read {
-                key: key.clone(),
-                msg_id,
-            },
+            body: BuiltInEvent::Read, // body: Output::Read {
+                                      //     key: key.clone(),
+                                      //     msg_id,
+                                      // },
         };
         let listner = self.event_broker.subscribe(msg_id);
         message
@@ -42,24 +42,34 @@ where
             .map_err(|_| error::Error::crash(msg_id))?;
         let response = listner.await.unwrap();
 
-        match response.body {
-            Input::ReadOk {
-                value,
-                in_reply_to: _,
-            } => Ok(value),
-            Input::Error { code: 20, .. } => {
-                self.write(key, V::default()).await.unwrap();
-                Ok(V::default())
-            }
-            Input::Error {
-                code,
-                text,
-                in_reply_to: _,
-            } => panic!("error creating new key: [{code}]: {text}"),
-            Input::Txn { .. } | Input::WriteOk { .. } => panic!(),
+        match response {
+            crate::event::Event::Maelstrom(_) => todo!(),
+            crate::event::Event::Injected(_) => todo!(),
+            crate::event::Event::BuiltIn(_) => todo!(),
         }
+
+        // match response.body {
+        //     Input::ReadOk {
+        //         value,
+        //         in_reply_to: _,
+        //     } => Ok(value),
+        //     Input::Error { code: 20, .. } => {
+        //         self.write(key, V::default()).await.unwrap();
+        //         Ok(V::default())
+        //     }
+        //     Input::Error {
+        //         code,
+        //         text,
+        //         in_reply_to: _,
+        //     } => panic!("error creating new key: [{code}]: {text}"),
+        //     Input::Txn { .. } | Input::WriteOk { .. } => panic!(),
+        // }
     }
-    async fn write<K, V>(&self, key: K, value: V) -> Result<(), error::Error> {
+    pub async fn write<K, V>(&self, key: K, value: V) -> Result<(), error::Error>
+    where
+        K: Serialize,
+        V: Serialize,
+    {
         let msg_id = self.ids.next_id();
         let message = Message {
             src: self.node_id.clone(),

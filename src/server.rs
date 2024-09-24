@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
-    event::EventBroker,
+    event::{Event, EventBroker, EventId},
     message::{InitRequest, Message},
     service, Node,
 };
@@ -31,7 +31,7 @@ where
         H: service::Service<HandlerInput<T, N>, Response = HandlerResponse<Message<Res>, T>>
             + Send
             + 'static,
-        T: Serialize + DeserializeOwned + Send + 'static + Debug + Clone,
+        T: Serialize + DeserializeOwned + Send + 'static + Debug + Clone + EventId,
         Res: Serialize + Send + 'static + Debug,
         N: Node + Send + 'static + Debug,
     {
@@ -74,7 +74,7 @@ where
             + Send
             + 'static,
         N: Send + 'static + Debug,
-        T: DeserializeOwned + Send + 'static + Debug,
+        T: DeserializeOwned + Send + 'static + Debug + Clone + EventId,
         Res: Send + 'static,
     {
         let input = serde_json::from_str::<Message<T>>(line)
@@ -94,7 +94,7 @@ where
         event_broker: &EventBroker<T>,
     ) -> anyhow::Result<()>
     where
-        T: Debug + Send + 'static,
+        T: Debug + Send + 'static + Clone + EventId,
         Res: Serialize + Debug,
     {
         match handler_response {
@@ -139,21 +139,15 @@ where
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub enum Event<T> {
-    Maelstrom { dest: usize, body: Message<T> },
-    Injected { dest: usize, body: Message<T> },
-}
-
 #[derive(Debug)]
-pub enum HandlerResponse<Res, T> {
+pub enum HandlerResponse<Res, T: EventId + Clone> {
     Response(Res),
     Event(Event<T>),
     None,
 }
 
 #[derive(Debug)]
-pub struct HandlerInput<T, N> {
+pub struct HandlerInput<T: EventId + Clone, N> {
     pub message: Message<T>,
     pub node: Arc<Mutex<N>>,
     pub event_broker: EventBroker<T>,

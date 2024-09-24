@@ -1,4 +1,4 @@
-use rust_maelstrom::{message::Message, service::Service, Fut, Node};
+use rust_maelstrom::{event::EventId, message::Message, service::Service, Fut, Node};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
@@ -52,6 +52,12 @@ pub enum MessageRequest {
         echo: serde_json::Value,
         msg_id: usize,
     },
+}
+
+impl EventId for MessageRequest {
+    fn get_event_id(&self) -> usize {
+        todo!()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

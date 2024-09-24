@@ -53,10 +53,9 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
                 Ok(server::HandlerResponse::Response(reply.with_body(body)))
             }),
             Request::BroadcastOk { in_reply_to } => Box::pin(async move {
-                Ok(server::HandlerResponse::Event(server::Event::Injected {
-                    dest: in_reply_to,
-                    body: reply.into_reply().0.with_body(body),
-                }))
+                Ok(server::HandlerResponse::Event(event::Event::Injected (
+                    reply.into_reply().0.with_body(body),
+                )))
             }),
         }
     }
@@ -129,8 +128,8 @@ pub enum Request {
     },
 }
 
-impl rust_maelstrom::message::MessageId for Request {
-    fn get_id(&self) -> usize {
+impl event::EventId for Request {
+    fn get_event_id(&self) -> usize {
         match self {
             Request::Topology { msg_id, .. }
             | Request::Broadcast { msg_id, .. }
