@@ -5,8 +5,8 @@ use std::{
 
 use anyhow::Context;
 use rust_maelstrom::{
-    event,
-    id_counter::Ids,
+    event::{self, Event},
+    id_counter::SeqIdCounter,
     message::{send_messages_with_retry, Message},
     server,
     service::Service,
@@ -31,11 +31,14 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
     fn call(
         &mut self,
         server::HandlerInput {
-            message,
+            event,
             node,
             event_broker,
         }: server::HandlerInput<Request, BroadcastNode>,
     ) -> Self::Future {
+        let Event::Maelstrom(message) = event else {
+            panic!();
+        };
         let src = message.src.clone();
         let (reply, body) = message.into_reply();
         match body {
@@ -66,7 +69,7 @@ pub struct BroadcastNode {
     node_id: String,
     neighbors: Vec<String>,
     messages: Vec<serde_json::Value>,
-    id_generator: Ids,
+    id_generator: SeqIdCounter,
 }
 impl Node for BroadcastNode {
     fn init(node_id: String, _node_ids: Vec<String>) -> Self {
@@ -74,7 +77,7 @@ impl Node for BroadcastNode {
             node_id,
             neighbors: Vec::new(),
             messages: Vec::new(),
-            id_generator: Ids::new(),
+            id_generator: SeqIdCounter::new(),
         }
     }
 }

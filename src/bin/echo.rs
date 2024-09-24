@@ -1,4 +1,9 @@
-use rust_maelstrom::{event::EventId, message::Message, service::Service, Fut, Node};
+use rust_maelstrom::{
+    event::{Event, EventId},
+    message::Message,
+    service::Service,
+    Fut, Node,
+};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
@@ -20,7 +25,10 @@ impl Service<rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>> for
         &mut self,
         request: rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>,
     ) -> Self::Future {
-        let (msg, body) = request.message.into_reply();
+        let Event::Maelstrom(message) = request.event else {
+            panic!();
+        };
+        let (msg, body) = message.into_reply();
         match body {
             MessageRequest::Echo { echo, msg_id } => Box::pin(async move {
                 Ok(rust_maelstrom::server::HandlerResponse::Response(

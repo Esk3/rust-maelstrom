@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
-    event::{Event, EventBroker, EventId},
+    event::{BuiltInEvent, Event, EventBroker, EventId},
     message::{InitRequest, Message},
     service, Node,
 };
@@ -77,11 +77,17 @@ where
         T: DeserializeOwned + Send + 'static + Debug + Clone + EventId,
         Res: Send + 'static,
     {
-        let input = serde_json::from_str::<Message<T>>(line)
-            .with_context(|| format!("found unknown input {line}"))?;
+        //TODO this error gets ignored. only the builtin error message gets displayed
+        let input = if let Ok(input) = serde_json::from_str::<Message<T>>(line) {
+            Event::Maelstrom(input)
+        } else {
+            let event = serde_json::from_str::<Message<BuiltInEvent>>(line)
+                .with_context(|| format!("Found unknown input {line}"))?;
+            Event::BuiltIn(event)
+        };
 
         let input = HandlerInput {
-            message: input,
+            event: input,
             node,
             event_broker,
         };
@@ -148,7 +154,7 @@ pub enum HandlerResponse<Res, T: EventId + Clone> {
 
 #[derive(Debug)]
 pub struct HandlerInput<T: EventId + Clone, N> {
-    pub message: Message<T>,
+    pub event: Event<T>,
     pub node: Arc<Mutex<N>>,
     pub event_broker: EventBroker<T>,
 }

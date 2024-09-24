@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
-pub struct Ids(Arc<Mutex<usize>>);
+pub struct SeqIdCounter(Arc<Mutex<usize>>);
 
-impl Ids {
+impl SeqIdCounter {
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(0)))
@@ -16,7 +16,7 @@ impl Ids {
     }
 }
 
-impl Default for Ids {
+impl Default for SeqIdCounter {
     fn default() -> Self {
         Self::new()
     }

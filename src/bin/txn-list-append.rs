@@ -1,16 +1,12 @@
 use rust_maelstrom::{
-    error::{self, Error},
-    event::{self, EventBroker},
-    id_counter::Ids,
+    event::{self, BuiltInEvent, Event, EventBroker},
+    id_counter::SeqIdCounter,
     maelstrom_service::lin_kv::LinKv,
     message::Message,
     server::{HandlerInput, HandlerResponse, Server},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
 #[derive(Debug)]
 struct Node {
     id: String,
-    ids: Ids,
+    ids: SeqIdCounter,
 }
 
 impl Node {}
@@ -31,7 +27,7 @@ impl rust_maelstrom::Node for Node {
     fn init(node_id: String, _node_ids: Vec<String>) -> Self {
         Self {
             id: node_id,
-            ids: Ids::new(),
+            ids: SeqIdCounter::new(),
         }
     }
 }
@@ -46,27 +42,44 @@ impl rust_maelstrom::service::Service<HandlerInput<Input, Node>> for Handler {
     fn call(
         &mut self,
         HandlerInput {
-            message,
+            event,
             node,
             event_broker,
         }: rust_maelstrom::server::HandlerInput<Input, Node>,
     ) -> Self::Future {
-        let (reply, body) = message.into_reply();
-        match body {
-            Input::Txn { msg_id, txn } => Box::pin(async move {
-                let txn = handle_txn(node, txn, event_broker).await;
-                Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
-                    in_reply_to: msg_id,
-                    txn,
-                })))
-            }),
-            Input::ReadOk { in_reply_to, .. }
-            | Input::WriteOk { in_reply_to }
-            | Input::Error { in_reply_to, .. } => Box::pin(async move {
-                Ok(HandlerResponse::Event(
-                    rust_maelstrom::event::Event::Injected(reply.into_reply().0.with_body(body)),
-                ))
-            }),
+        match event {
+            Event::Maelstrom(msg) => {
+                Box::pin(async move { handle_message(node, msg, event_broker).await })
+            }
+            Event::BuiltIn(message) => {
+                Box::pin(async move { handle_built_in_event(message, event_broker) })
+            }
+            Event::Injected(msg) => panic!("handler got unexpected message: {msg:?}"),
+        }
+    }
+}
+
+fn handle_built_in_event(
+    message: Message<BuiltInEvent>,
+    event_broker: EventBroker<Input>,
+) -> anyhow::Result<HandlerResponse<Message<Output>, Input>> {
+    event_broker.publish_event(Event::BuiltIn(message)).unwrap();
+    Ok(HandlerResponse::None)
+    // Ok(HandlerResponse::Event(Event::Injected(message)))
+}
+async fn handle_message(
+    node: Arc<Mutex<Node>>,
+    message: Message<Input>,
+    event_broker: EventBroker<Input>,
+) -> anyhow::Result<HandlerResponse<Message<Output>, Input>> {
+    let (reply, body) = message.into_reply();
+    match body {
+        Input::Txn { msg_id, txn } => {
+            let txn = handle_txn(node, txn, event_broker).await;
+            Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
+                in_reply_to: msg_id,
+                txn,
+            })))
         }
     }
 }
@@ -89,18 +102,18 @@ async fn handle_txn(
         match op {
             Txn::Read(r, key, _) => {
                 let value = lin_kv_client
-                    .read::<serde_json::Value, Vec<serde_json::Value>>(key.clone(), 1)
+                    .read(key.clone(), event_broker.get_id_counter().next_id())
                     .await
                     .unwrap();
                 result.push(Txn::Read(r, key, Some(value)));
             }
             Txn::Append(a, key, new_value) => {
                 let mut values = lin_kv_client
-                    .read::<serde_json::Value, Vec<serde_json::Value>>(key.clone(), 2)
+                    .read(key.clone(), event_broker.get_id_counter().next_id())
                     .await
                     .unwrap();
                 values.push(new_value.clone());
-                lin_kv_client.write(key.clone(), values).await.unwrap();
+                lin_kv_client.write(key.clone(), values, event_broker.get_id_counter().next_id()).await.unwrap();
                 result.push(Txn::Append(a, key, new_value));
             }
         }
@@ -111,40 +124,13 @@ async fn handle_txn(
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Input {
-    Txn {
-        msg_id: usize,
-        txn: Vec<Txn>,
-    },
-    /// lin-kv read ok
-    ReadOk {
-        value: HashMap<serde_json::Value, Vec<serde_json::Value>>,
-        in_reply_to: usize,
-    },
-    /// lin-kv write
-    WriteOk {
-        in_reply_to: usize,
-    },
-    Error {
-        code: usize,
-        text: String,
-        in_reply_to: usize,
-    },
+    Txn { msg_id: usize, txn: Vec<Txn> },
 }
 
 impl event::EventId for Input {
     fn get_event_id(&self) -> usize {
         match &self {
             Input::Txn { msg_id, txn: _ } => *msg_id,
-            Input::ReadOk {
-                value: _,
-                in_reply_to,
-            }
-            | Input::WriteOk { in_reply_to }
-            | Input::Error {
-                code: _,
-                text: _,
-                in_reply_to,
-            } => *in_reply_to,
         }
     }
 }
@@ -153,9 +139,6 @@ impl rust_maelstrom::message::MessageId for Input {
     fn get_id(&self) -> usize {
         match self {
             Input::Txn { msg_id, .. } => *msg_id,
-            Input::ReadOk { in_reply_to, .. }
-            | Input::WriteOk { in_reply_to }
-            | Input::Error { in_reply_to, .. } => *in_reply_to,
         }
     }
 }
@@ -163,21 +146,7 @@ impl rust_maelstrom::message::MessageId for Input {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Output {
-    TxnOk {
-        in_reply_to: usize,
-        txn: Vec<Txn>,
-    },
-    /// lin-kv read
-    Read {
-        key: serde_json::Value,
-        msg_id: usize,
-    },
-    /// lin_kv write
-    Write {
-        key: serde_json::Value,
-        value: serde_json::Value,
-        msg_id: usize,
-    },
+    TxnOk { in_reply_to: usize, txn: Vec<Txn> },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

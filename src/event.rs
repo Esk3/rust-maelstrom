@@ -2,43 +2,50 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug};
 
-use crate::message::Message;
+use crate::{id_counter::SeqIdCounter, message::Message};
 
 #[derive(Debug, Deserialize)]
 pub enum Event<T: EventId> {
     Maelstrom(Message<T>),
     Injected(Message<T>),
-    BuiltIn(BuiltInEvent),
+    BuiltIn(Message<BuiltInEvent>),
 }
 
 impl<T: EventId> Event<T> {
     pub fn id(&self) -> usize {
         match self {
             Event::Maelstrom(msg) | Event::Injected(msg) => msg.body.get_event_id(),
-            Event::BuiltIn(_) => todo!(),
+            Event::BuiltIn(message) => match message.body {
+                BuiltInEvent::ReadOk { in_reply_to, .. }
+                | BuiltInEvent::WriteOk { in_reply_to, .. }
+                | BuiltInEvent::CasOk { in_reply_to, .. }
+                | BuiltInEvent::Error { in_reply_to, .. } => in_reply_to,
+            },
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum BuiltInEvent {
-    ReadOk {},
-    Read, // match response.body {
-          //     Input::ReadOk {
-          //         value,
-          //         in_reply_to: _,
-          //     } => Ok(value),
-          //     Input::Error { code: 20, .. } => {
-          //         self.write(key, V::default()).await.unwrap();
-          //         Ok(V::default())
-          //     }
-          //     Input::Error {
-          //         code,
-          //         text,
-          //         in_reply_to: _,
-          //     } => panic!("error creating new key: [{code}]: {text}"),
-          //     Input::Txn { .. } | Input::WriteOk { .. } => panic!(),
-          // }
+    ReadOk {
+        value: serde_json::Value,
+        msg_id: Option<usize>,
+        in_reply_to: usize,
+    },
+    WriteOk {
+        msg_id: Option<usize>,
+        in_reply_to: usize,
+    },
+    CasOk {
+        msg_id: Option<usize>,
+        in_reply_to: usize,
+    },
+    Error {
+        in_reply_to: usize,
+        code: usize,
+        text: String,
+    },
 }
 
 pub trait EventId {
@@ -52,6 +59,7 @@ where
 {
     new_ids_tx: tokio::sync::mpsc::UnboundedSender<(usize, tokio::sync::oneshot::Sender<Event<T>>)>,
     events_tx: tokio::sync::mpsc::UnboundedSender<Event<T>>,
+    id_counter: SeqIdCounter,
 }
 
 impl<T> EventBroker<T>
@@ -89,6 +97,7 @@ where
         Self {
             new_ids_tx,
             events_tx,
+            id_counter: SeqIdCounter::new()
         }
     }
 
@@ -104,6 +113,10 @@ where
             bail!("{e}: channel error on publishing event")
         }
         Ok(())
+    }
+    #[must_use] 
+    pub fn get_id_counter(&self) -> &SeqIdCounter {
+        &self.id_counter
     }
 }
 
