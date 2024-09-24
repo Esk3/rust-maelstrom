@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error;
 use crate::event::{BuiltInEvent, EventBroker, EventId};
-use crate::message::Message;
-
 use crate::id_counter::Ids;
+use crate::message::Message;
 
 #[derive(Debug)]
 pub struct LinKv<T: Clone + EventId> {
@@ -26,15 +25,19 @@ where
             event_broker,
         }
     }
-    pub async fn read<K, V>(&self, key: serde_json::Value) -> Result<V, error::Error> {
+    pub async fn read<K, V>(&self, key: K, id: usize) -> Result<V, error::Error>
+    where
+        K: Serialize,
+        V: Serialize,
+    {
         let msg_id = self.ids.next_id();
         let message = Message {
             src: self.node_id.clone(),
             dest: "lin-kv".to_string(),
-            body: BuiltInEvent::Read, // body: Output::Read {
-                                      //     key: key.clone(),
-                                      //     msg_id,
-                                      // },
+            body: Output::<K, V>::Read { key, msg_id: id }, //BuiltInEvent::Read, // body: Output::Read {
+                                                            //     key: key.clone(),
+                                                            //     msg_id,
+                                                            // },
         };
         let listner = self.event_broker.subscribe(msg_id);
         message
@@ -98,7 +101,8 @@ enum Input<T> {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum Output<K, V> {
     Read { key: K, msg_id: usize },
     Write { key: K, value: V, msg_id: usize },

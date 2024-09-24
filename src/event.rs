@@ -22,7 +22,23 @@ impl<T: EventId> Event<T> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum BuiltInEvent {
-    Read
+    ReadOk {},
+    Read, // match response.body {
+          //     Input::ReadOk {
+          //         value,
+          //         in_reply_to: _,
+          //     } => Ok(value),
+          //     Input::Error { code: 20, .. } => {
+          //         self.write(key, V::default()).await.unwrap();
+          //         Ok(V::default())
+          //     }
+          //     Input::Error {
+          //         code,
+          //         text,
+          //         in_reply_to: _,
+          //     } => panic!("error creating new key: [{code}]: {text}"),
+          //     Input::Txn { .. } | Input::WriteOk { .. } => panic!(),
+          // }
 }
 
 pub trait EventId {
@@ -51,18 +67,20 @@ where
             loop {
                 tokio::select! {
                     msg = new_ids_rx.recv() => {
+                        dbg!(&msg);
                         let (id, tx) = msg.unwrap();
                         subscribers.insert(id, tx);
                     },
                     event = events_rx.recv() => {
+                        dbg!(&event);
                         let event: Event<T> = event.unwrap();
                         let id = event.id();
-                        // let (id, body) = match event.unwrap() {
-                        //     Event::Maelstrom { dest, body } | Event::Injected { dest, body } => (dest, body),
-                        // };
+                        dbg!(&id);
                         let Some(tx) = subscribers.remove(&id) else {
+                            dbg!("not in events");
                             return;
                         };
+                        dbg!("sending msg");
                         tx.send(event).unwrap();
                     }
                 }

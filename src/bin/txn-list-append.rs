@@ -89,14 +89,14 @@ async fn handle_txn(
         match op {
             Txn::Read(r, key, _) => {
                 let value = lin_kv_client
-                    .read::<serde_json::Value, Vec<serde_json::Value>>(key.clone())
+                    .read::<serde_json::Value, Vec<serde_json::Value>>(key.clone(), 1)
                     .await
                     .unwrap();
                 result.push(Txn::Read(r, key, Some(value)));
             }
             Txn::Append(a, key, new_value) => {
                 let mut values = lin_kv_client
-                    .read::<serde_json::Value, Vec<serde_json::Value>>(key.clone())
+                    .read::<serde_json::Value, Vec<serde_json::Value>>(key.clone(), 2)
                     .await
                     .unwrap();
                 values.push(new_value.clone());
@@ -133,7 +133,19 @@ enum Input {
 
 impl event::EventId for Input {
     fn get_event_id(&self) -> usize {
-        todo!()
+        match &self {
+            Input::Txn { msg_id, txn: _ } => *msg_id,
+            Input::ReadOk {
+                value: _,
+                in_reply_to,
+            }
+            | Input::WriteOk { in_reply_to }
+            | Input::Error {
+                code: _,
+                text: _,
+                in_reply_to,
+            } => *in_reply_to,
+        }
     }
 }
 
