@@ -132,12 +132,13 @@ pub enum LinKvInput<T> {
         value: T,
         in_reply_to: usize,
     },
+    WriteOk {
+        in_reply_to: usize,
+    },
+    CasOk { in_reply_to: usize },
     Error {
         code: usize,
         text: String,
-        in_reply_to: usize,
-    },
-    WriteOk {
         in_reply_to: usize,
     },
 }
@@ -147,4 +148,5 @@ pub enum LinKvInput<T> {
 pub enum LinKvOutput<K, V> {
     Read { key: K, msg_id: usize },
     Write { key: K, value: V, msg_id: usize },
+    Cas { key: K, from: V, to: V, msg_id: usize }
 }
