@@ -10,31 +10,35 @@ pub struct Error {
 
 impl Error {
     #[must_use]
-    pub fn crash(msg_id: usize) -> Self {
-        Self {
-            error: ErrorTag::Error,
-            in_reply_to: msg_id,
-            code: ErrorCode::Crash,
-            text: "internal server error".to_string(),
-        }
+    pub fn crash(in_reply_to: usize) -> Self {
+        Self::crash_with_message("internal error", in_reply_to)
     }
-    pub fn new(code: ErrorCode, text: String, in_reply_to: usize) -> Self {
+
+    #[must_use]
+    pub fn crash_with_message(text: impl Into<String>, in_reply_to: usize) -> Self {
+        Self::new(ErrorCode::Crash, text, in_reply_to)
+    }
+
+    pub fn new(code: impl Into<ErrorCode>, text: impl Into<String>, in_reply_to: usize) -> Self {
         Self {
             error: ErrorTag::Error,
             in_reply_to,
-            code,
-            text,
+            code: code.into(),
+            text: text.into(),
         }
     }
 
+    #[must_use]
     pub fn code(&self) -> ErrorCode {
         self.code
     }
 
+    #[must_use]
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    #[must_use]
     pub fn in_reply_to(&self) -> usize {
         self.in_reply_to
     }
@@ -65,4 +69,22 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ErrorTag {
     Error,
+}
+
+impl From<usize> for ErrorCode {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => Self::Timeout,
+            10 => Self::NotSupported,
+            11 => Self::TemporarilyUnavailable,
+            12 => Self::MalformedRequest,
+            #[allow(clippy::match_same_arms)]
+            13 => Self::Crash,
+            14 => Self::Abort,
+            20 => Self::KeyDoesNotExist,
+            22 => Self::PreconditionFailed,
+            30 => Self::TxnConflict,
+            _ => Self::Crash,
+        }
+    }
 }

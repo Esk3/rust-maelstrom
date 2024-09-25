@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::event::{BuiltInEvent, EventBroker, EventId};
+use crate::event::{EventBroker, EventId};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message<T> {

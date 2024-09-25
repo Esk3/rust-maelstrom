@@ -1,6 +1,5 @@
 use rust_maelstrom::{
-    event::{self, BuiltInEvent, Event, EventBroker},
-    id_counter::SeqIdCounter,
+    event::{self, Event, EventBroker},
     maelstrom_service::lin_kv::{ExtractInput, LinKv, LinKvInput},
     message::Message,
     server::{HandlerInput, HandlerResponse, Server},
@@ -18,17 +17,13 @@ async fn main() -> anyhow::Result<()> {
 #[derive(Debug)]
 struct Node {
     id: String,
-    ids: SeqIdCounter,
 }
 
 impl Node {}
 
 impl rust_maelstrom::Node for Node {
     fn init(node_id: String, _node_ids: Vec<String>) -> Self {
-        Self {
-            id: node_id,
-            ids: SeqIdCounter::new(),
-        }
+        Self { id: node_id }
     }
 }
 
@@ -86,14 +81,12 @@ async fn handle_txn(
     event_broker: EventBroker<Input>,
 ) -> Vec<Txn> {
     let node_id;
-    let ids;
     {
         let node = node.lock().unwrap();
         node_id = node.id.clone();
-        ids = node.ids.clone();
     }
     let mut result = Vec::new();
-    let lin_kv_client = LinKv::new(node_id.clone(), ids.clone(), event_broker.clone());
+    let lin_kv_client = LinKv::new(node_id.clone(), event_broker.clone());
     for op in txn {
         match op {
             Txn::Read(r, key, _) => {
@@ -124,10 +117,10 @@ enum Input {
 
 impl ExtractInput for Input {
     type ReturnValue = Vec<serde_json::Value>;
-    fn extract_input(self) -> LinKvInput<Self::ReturnValue> {
+    fn extract_input(self) -> Option<LinKvInput<Self::ReturnValue>> {
         match self {
-            Input::Txn { msg_id, txn } => todo!(),
-            Input::LinKv(lin_kv) => lin_kv,
+            Input::Txn {..} => None,
+            Input::LinKv(lin_kv) => Some(lin_kv),
         }
     }
 }

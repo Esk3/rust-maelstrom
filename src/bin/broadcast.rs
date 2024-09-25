@@ -55,7 +55,7 @@ impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
                 let body = read(&node, msg_id);
                 Ok(server::HandlerResponse::Response(reply.with_body(body)))
             }),
-            Request::BroadcastOk { in_reply_to } => Box::pin(async move {
+            Request::BroadcastOk { in_reply_to: _ } => Box::pin(async move {
                 Ok(server::HandlerResponse::Event(event::Event::Injected (
                     reply.into_reply().0.with_body(body),
                 )))

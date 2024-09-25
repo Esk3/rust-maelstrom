@@ -4,11 +4,11 @@ use std::{
 };
 
 use anyhow::Context;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
-    event::{BuiltInEvent, Event, EventBroker, EventId},
+    event::{Event, EventBroker, EventId},
     message::{InitRequest, Message},
     service, Node,
 };
@@ -86,7 +86,8 @@ where
         //     Event::BuiltIn(event)
         // };
 
-        let input = serde_json::from_str::<Message<T>>(line).with_context(|| format!("Found unknown input {line}"))?;
+        let input = serde_json::from_str::<Message<T>>(line)
+            .with_context(|| format!("Found unknown input {line}"))?;
         let input = Event::Maelstrom(input);
         let input = HandlerInput {
             event: input,

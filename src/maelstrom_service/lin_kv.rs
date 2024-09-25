@@ -1,11 +1,9 @@
-use core::panic;
 use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error;
-use crate::event::{BuiltInEvent, EventBroker, EventId};
-use crate::id_counter::SeqIdCounter;
+use crate::error::{self, ErrorCode};
+use crate::event::{Event, EventBroker, EventId};
 use crate::message::Message;
 
 #[derive(Debug)]
@@ -19,12 +17,13 @@ where
     T: Debug + Send + Clone + EventId + 'static,
 {
     #[must_use]
-    pub fn new(node_id: String, ids: SeqIdCounter, event_broker: EventBroker<T>) -> Self {
+    pub fn new(node_id: String, event_broker: EventBroker<T>) -> Self {
         Self {
             node_id,
             event_broker,
         }
     }
+
     pub async fn read<K, V>(&self, key: K) -> Result<V, error::Error>
     where
         K: Serialize,
@@ -41,24 +40,29 @@ where
         message
             .send(std::io::stdout())
             .map_err(|_| error::Error::crash(msg_id))?;
-        let response = listner.await.unwrap();
+        let response = listner
+            .await
+            .map_err(|_| error::Error::crash_with_message("event broker dropped event", msg_id))?;
 
         match response {
-            crate::event::Event::Injected(msg) => match msg.body.extract_input() {
-                LinKvInput::ReadOk { value, in_reply_to } => Ok(value),
-                LinKvInput::WriteOk { in_reply_to } => panic!(),
-                // TODO fix error code.
-                LinKvInput::Error {
+            Event::Injected(Message { body, .. }) => match body.extract_input() {
+                Some(LinKvInput::ReadOk {
+                    value,
+                    in_reply_to: _,
+                }) => Ok(value),
+                Some(LinKvInput::WriteOk { in_reply_to }) => Err(error::Error::crash(in_reply_to)),
+                Some(LinKvInput::Error {
                     code,
                     text,
                     in_reply_to,
-                } => Err(error::Error::new(
-                    error::ErrorCode::KeyDoesNotExist,
-                    text,
-                    in_reply_to,
+                }) => Err(error::Error::new(code, text, in_reply_to)),
+                None => Err(error::Error::crash_with_message(
+                    "failed to extract lin kv reply",
+                    /* TODO in_reply_to. use get_event_id() ?  */ 0,
                 )),
             },
-            _ => todo!(),
+            // TODO in_reply_to
+            Event::Maelstrom(_) => Err(error::Error::new(ErrorCode::NotSupported, "", 0)),
         }
     }
 
@@ -71,9 +75,9 @@ where
         match self.read(key.clone()).await {
             Ok(value) => Ok(value),
             Err(err) if matches!(err.code(), error::ErrorCode::KeyDoesNotExist) => {
-                self.write(key, V::default()).await.map(|_| V::default())
+                self.write(key, V::default()).await.map(|()| V::default())
             }
-            Err(_) => todo!(),
+            Err(err) => Err(err),
         }
     }
 
@@ -92,20 +96,33 @@ where
         let listner = self.event_broker.subscribe(msg_id);
         message
             .send(std::io::stdout())
-            .map_err(|_| error::Error::crash(0 /* TODO msg id*/))?;
+            .map_err(|_| error::Error::crash_with_message("error writing to stdout", msg_id))?;
         match listner.await {
-            Ok(crate::event::Event::Injected(message)) => match message.body.extract_input() {
-                LinKvInput::WriteOk { in_reply_to: _ } => Ok(()),
-                LinKvInput::ReadOk { .. } | LinKvInput::Error { .. } => todo!(),
+            Ok(Event::Injected(message)) => match message.body.extract_input() {
+                Some(LinKvInput::WriteOk { in_reply_to: _ }) => Ok(()),
+                Some(
+                    LinKvInput::ReadOk { in_reply_to, .. } | LinKvInput::Error { in_reply_to, .. },
+                ) => Err(error::Error::crash_with_message(
+                    "expected write ok",
+                    in_reply_to,
+                )),
+                None => todo!(),
             },
-            _ => todo!(),
+            Ok(Event::Maelstrom(_)) => Err(error::Error::crash_with_message(
+                "expected injected message",
+                /* TODO in_reply_to  */ 0,
+            )),
+            Err(e) => Err(error::Error::crash_with_message(
+                format!("recv dropped?: {e:?}"),
+                /* TODO in_reply_to */ 0,
+            )),
         }
     }
 }
 
 pub trait ExtractInput {
     type ReturnValue;
-    fn extract_input(self) -> LinKvInput<Self::ReturnValue>;
+    fn extract_input(self) -> Option<LinKvInput<Self::ReturnValue>>;
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
