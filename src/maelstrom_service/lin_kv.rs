@@ -56,6 +56,10 @@ where
                     text,
                     in_reply_to,
                 }) => Err(error::Error::new(code, text, in_reply_to)),
+                Some(LinKvInput::CasOk { in_reply_to }) => Err(error::Error::crash_with_message(
+                    "expected: read_ok got: cas_ok",
+                    in_reply_to,
+                )),
                 None => Err(error::Error::crash_with_message(
                     "failed to extract lin kv reply",
                     /* TODO in_reply_to. use get_event_id() ?  */ 0,
@@ -106,6 +110,10 @@ where
                     "expected write ok",
                     in_reply_to,
                 )),
+                Some(LinKvInput::CasOk { in_reply_to }) => Err(error::Error::crash_with_message(
+                    "expected: write_ok. got: cas_ok",
+                    in_reply_to,
+                )),
                 None => todo!(),
             },
             Ok(Event::Maelstrom(_)) => Err(error::Error::crash_with_message(
@@ -135,7 +143,9 @@ pub enum LinKvInput<T> {
     WriteOk {
         in_reply_to: usize,
     },
-    CasOk { in_reply_to: usize },
+    CasOk {
+        in_reply_to: usize,
+    },
     Error {
         code: usize,
         text: String,
@@ -146,7 +156,19 @@ pub enum LinKvInput<T> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LinKvOutput<K, V> {
-    Read { key: K, msg_id: usize },
-    Write { key: K, value: V, msg_id: usize },
-    Cas { key: K, from: V, to: V, msg_id: usize }
+    Read {
+        key: K,
+        msg_id: usize,
+    },
+    Write {
+        key: K,
+        value: V,
+        msg_id: usize,
+    },
+    Cas {
+        key: K,
+        from: V,
+        to: V,
+        msg_id: usize,
+    },
 }
