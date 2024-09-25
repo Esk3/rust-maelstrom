@@ -145,7 +145,7 @@ where
                 }
             },
             Some(response) = set.join_next() => {
-                let response = dbg!(response).context("thread panicked").unwrap().context("future returned error").unwrap();
+                let response = response.context("thread panicked").unwrap().context("future returned error").unwrap();
                 messages.retain(|message| message.body.get_event_id() != response.id());
             }
         }

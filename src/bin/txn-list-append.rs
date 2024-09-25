@@ -65,10 +65,6 @@ async fn handle_message(
                 txn,
             })))
         }
-        // Input::LinKv(ref lin_kv) => Ok(match lin_kv {
-        //     LinKvInput::ReadOk { value, in_reply_to } => HandlerResponse::Event(Event::Injected(reply.into_reply().0.with_body(body))),
-        //     LinKvInput::Error { code, text, in_reply_to } => todo!(),
-        // }),
         Input::LinKv(_) => Ok(HandlerResponse::Event(Event::Injected(
             reply.into_reply().0.with_body(body),
         ))),
@@ -123,14 +119,6 @@ impl ExtractInput for Input {
             Input::LinKv(lin_kv) => Some(lin_kv),
         }
     }
-}
-
-#[test]
-fn parsetest() {
-    let s = r#"{"id":14,"src":"lin-kv","dest":"n1","body":{"type":"error","code":20,"text":"key does not exist","in_reply_to":1}}"#;
-    dbg!(&s);
-    let value = serde_json::from_str::<Message<Input>>(s);
-    value.unwrap();
 }
 
 impl event::EventId for Input {

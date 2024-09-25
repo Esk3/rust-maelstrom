@@ -68,20 +68,16 @@ where
             loop {
                 tokio::select! {
                     msg = new_ids_rx.recv() => {
-                        dbg!(&msg);
                         let (id, tx) = msg.unwrap();
                         subscribers.insert(id, tx);
                     },
                     event = events_rx.recv() => {
-                        dbg!(&event);
                         let event: Event<T> = event.unwrap();
                         let id = event.id();
-                        dbg!(&id);
                         let Some(tx) = subscribers.remove(&id) else {
-                            dbg!("not in events");
+                            dbg!("not in events", id);
                             return;
                         };
-                        dbg!("sending msg");
                         tx.send(event).unwrap();
                     }
                 }
@@ -90,7 +86,7 @@ where
         Self {
             new_ids_tx,
             events_tx,
-            id_counter: SeqIdCounter::new()
+            id_counter: SeqIdCounter::new(),
         }
     }
 
@@ -107,7 +103,7 @@ where
         }
         Ok(())
     }
-    #[must_use] 
+    #[must_use]
     pub fn get_id_counter(&self) -> &SeqIdCounter {
         &self.id_counter
     }
