@@ -18,6 +18,26 @@ impl Error {
             text: "internal server error".to_string(),
         }
     }
+    pub fn new(code: ErrorCode, text: String, in_reply_to: usize) -> Self {
+        Self {
+            error: ErrorTag::Error,
+            in_reply_to,
+            code,
+            text,
+        }
+    }
+
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn in_reply_to(&self) -> usize {
+        self.in_reply_to
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 use rust_maelstrom::{
     event::{self, BuiltInEvent, Event, EventBroker},
     id_counter::SeqIdCounter,
-    maelstrom_service::lin_kv::LinKv,
+    maelstrom_service::lin_kv::{ExtractInput, LinKv, LinKvInput},
     message::Message,
     server::{HandlerInput, HandlerResponse, Server},
 };
@@ -51,22 +51,11 @@ impl rust_maelstrom::service::Service<HandlerInput<Input, Node>> for Handler {
             Event::Maelstrom(msg) => {
                 Box::pin(async move { handle_message(node, msg, event_broker).await })
             }
-            Event::BuiltIn(message) => {
-                Box::pin(async move { handle_built_in_event(message, event_broker) })
-            }
             Event::Injected(msg) => panic!("handler got unexpected message: {msg:?}"),
         }
     }
 }
 
-fn handle_built_in_event(
-    message: Message<BuiltInEvent>,
-    event_broker: EventBroker<Input>,
-) -> anyhow::Result<HandlerResponse<Message<Output>, Input>> {
-    event_broker.publish_event(Event::BuiltIn(message)).unwrap();
-    Ok(HandlerResponse::None)
-    // Ok(HandlerResponse::Event(Event::Injected(message)))
-}
 async fn handle_message(
     node: Arc<Mutex<Node>>,
     message: Message<Input>,
@@ -81,6 +70,13 @@ async fn handle_message(
                 txn,
             })))
         }
+        // Input::LinKv(ref lin_kv) => Ok(match lin_kv {
+        //     LinKvInput::ReadOk { value, in_reply_to } => HandlerResponse::Event(Event::Injected(reply.into_reply().0.with_body(body))),
+        //     LinKvInput::Error { code, text, in_reply_to } => todo!(),
+        // }),
+        Input::LinKv(_) => Ok(HandlerResponse::Event(Event::Injected(
+            reply.into_reply().0.with_body(body),
+        ))),
     }
 }
 
@@ -101,19 +97,13 @@ async fn handle_txn(
     for op in txn {
         match op {
             Txn::Read(r, key, _) => {
-                let value = lin_kv_client
-                    .read(key.clone(), event_broker.get_id_counter().next_id())
-                    .await
-                    .unwrap();
+                let value = lin_kv_client.read_or_default(key.clone()).await.unwrap();
                 result.push(Txn::Read(r, key, Some(value)));
             }
             Txn::Append(a, key, new_value) => {
-                let mut values = lin_kv_client
-                    .read(key.clone(), event_broker.get_id_counter().next_id())
-                    .await
-                    .unwrap();
+                let mut values = lin_kv_client.read_or_default(key.clone()).await.unwrap();
                 values.push(new_value.clone());
-                lin_kv_client.write(key.clone(), values, event_broker.get_id_counter().next_id()).await.unwrap();
+                lin_kv_client.write(key.clone(), values).await.unwrap();
                 result.push(Txn::Append(a, key, new_value));
             }
         }
@@ -124,13 +114,41 @@ async fn handle_txn(
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Input {
-    Txn { msg_id: usize, txn: Vec<Txn> },
+    Txn {
+        msg_id: usize,
+        txn: Vec<Txn>,
+    },
+    #[serde(untagged)]
+    LinKv(LinKvInput<Vec<serde_json::Value>>),
+}
+
+impl ExtractInput for Input {
+    type ReturnValue = Vec<serde_json::Value>;
+    fn extract_input(self) -> LinKvInput<Self::ReturnValue> {
+        match self {
+            Input::Txn { msg_id, txn } => todo!(),
+            Input::LinKv(lin_kv) => lin_kv,
+        }
+    }
+}
+
+#[test]
+fn parsetest() {
+    let s = r#"{"id":14,"src":"lin-kv","dest":"n1","body":{"type":"error","code":20,"text":"key does not exist","in_reply_to":1}}"#;
+    dbg!(&s);
+    let value = serde_json::from_str::<Message<Input>>(s);
+    value.unwrap();
 }
 
 impl event::EventId for Input {
     fn get_event_id(&self) -> usize {
         match &self {
             Input::Txn { msg_id, txn: _ } => *msg_id,
+            Input::LinKv(lin_kv) => match lin_kv {
+                LinKvInput::ReadOk { in_reply_to, .. }
+                | LinKvInput::WriteOk { in_reply_to }
+                | LinKvInput::Error { in_reply_to, .. } => *in_reply_to,
+            },
         }
     }
 }
@@ -139,6 +157,11 @@ impl rust_maelstrom::message::MessageId for Input {
     fn get_id(&self) -> usize {
         match self {
             Input::Txn { msg_id, .. } => *msg_id,
+            Input::LinKv(lin_kv) => match lin_kv {
+                LinKvInput::ReadOk { in_reply_to, .. }
+                | LinKvInput::WriteOk { in_reply_to }
+                | LinKvInput::Error { in_reply_to, .. } => *in_reply_to,
+            },
         }
     }
 }

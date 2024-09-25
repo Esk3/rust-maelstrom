@@ -1,3 +1,4 @@
+use core::panic;
 use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
@@ -24,51 +25,92 @@ where
             event_broker,
         }
     }
-    pub async fn read(&self, key: serde_json::Value, id: usize) -> Result<serde_json::Value, error::Error>
-    {
-        let message = Message {
-            src: self.node_id.clone(),
-            dest: "lin-kv".to_string(),
-            body: Output::<serde_json::Value, serde_json::Value>::Read { key, msg_id: id }, 
-        };
-        let listner = self.event_broker.subscribe(id);
-        message
-            .send(std::io::stdout())
-            .map_err(|_| error::Error::crash(id))?;
-        let response = listner.await.unwrap();
-
-        match response {
-            crate::event::Event::Maelstrom(_) => todo!(),
-            crate::event::Event::Injected(_) => todo!(),
-            crate::event::Event::BuiltIn(message) => match message.body {
-                BuiltInEvent::ReadOk { value, msg_id, in_reply_to } => Ok(value),
-                BuiltInEvent::WriteOk { msg_id, in_reply_to } => todo!(),
-                BuiltInEvent::CasOk { msg_id, in_reply_to } => todo!(),
-                BuiltInEvent::Error { in_reply_to, code, text } => todo!(),
-            },
-        }
-    }
-    pub async fn write<K, V>(&self, key: K, value: V, msg_id: usize) -> Result<(), error::Error>
+    pub async fn read<K, V>(&self, key: K) -> Result<V, error::Error>
     where
         K: Serialize,
         V: Serialize,
+        T: ExtractInput<ReturnValue = V>,
     {
+        let msg_id = self.event_broker.get_id_counter().next_id();
         let message = Message {
             src: self.node_id.clone(),
             dest: "lin-kv".to_string(),
-            body: Output::Write { key, value, msg_id },
+            body: LinKvOutput::<K, V>::Read { key, msg_id },
+        };
+        let listner = self.event_broker.subscribe(msg_id);
+        message
+            .send(std::io::stdout())
+            .map_err(|_| error::Error::crash(msg_id))?;
+        let response = listner.await.unwrap();
+
+        match response {
+            crate::event::Event::Injected(msg) => match msg.body.extract_input() {
+                LinKvInput::ReadOk { value, in_reply_to } => Ok(value),
+                LinKvInput::WriteOk { in_reply_to } => panic!(),
+                // TODO fix error code.
+                LinKvInput::Error {
+                    code,
+                    text,
+                    in_reply_to,
+                } => Err(error::Error::new(
+                    error::ErrorCode::KeyDoesNotExist,
+                    text,
+                    in_reply_to,
+                )),
+            },
+            _ => todo!(),
+        }
+    }
+
+    pub async fn read_or_default<K, V>(&self, key: K) -> Result<V, error::Error>
+    where
+        K: Serialize + Clone,
+        V: Serialize + Default,
+        T: ExtractInput<ReturnValue = V>,
+    {
+        match self.read(key.clone()).await {
+            Ok(value) => Ok(value),
+            Err(err) if matches!(err.code(), error::ErrorCode::KeyDoesNotExist) => {
+                self.write(key, V::default()).await.map(|_| V::default())
+            }
+            Err(_) => todo!(),
+        }
+    }
+
+    pub async fn write<K, V>(&self, key: K, value: V) -> Result<(), error::Error>
+    where
+        K: Serialize,
+        V: Serialize,
+        T: ExtractInput<ReturnValue = V>,
+    {
+        let msg_id = self.event_broker.get_id_counter().next_id();
+        let message = Message {
+            src: self.node_id.clone(),
+            dest: "lin-kv".to_string(),
+            body: LinKvOutput::Write { key, value, msg_id },
         };
         let listner = self.event_broker.subscribe(msg_id);
         message
             .send(std::io::stdout())
             .map_err(|_| error::Error::crash(0 /* TODO msg id*/))?;
-        listner.await.unwrap();
-        Ok(())
+        match listner.await {
+            Ok(crate::event::Event::Injected(message)) => match message.body.extract_input() {
+                LinKvInput::WriteOk { in_reply_to: _ } => Ok(()),
+                LinKvInput::ReadOk { .. } | LinKvInput::Error { .. } => todo!(),
+            },
+            _ => todo!(),
+        }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-enum Input<T> {
+pub trait ExtractInput {
+    type ReturnValue;
+    fn extract_input(self) -> LinKvInput<Self::ReturnValue>;
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LinKvInput<T> {
     ReadOk {
         value: T,
         in_reply_to: usize,
@@ -78,11 +120,14 @@ enum Input<T> {
         text: String,
         in_reply_to: usize,
     },
+    WriteOk {
+        in_reply_to: usize,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum Output<K, V> {
+pub enum LinKvOutput<K, V> {
     Read { key: K, msg_id: usize },
     Write { key: K, value: V, msg_id: usize },
 }

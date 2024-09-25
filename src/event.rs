@@ -8,19 +8,12 @@ use crate::{id_counter::SeqIdCounter, message::Message};
 pub enum Event<T: EventId> {
     Maelstrom(Message<T>),
     Injected(Message<T>),
-    BuiltIn(Message<BuiltInEvent>),
 }
 
 impl<T: EventId> Event<T> {
     pub fn id(&self) -> usize {
         match self {
             Event::Maelstrom(msg) | Event::Injected(msg) => msg.body.get_event_id(),
-            Event::BuiltIn(message) => match message.body {
-                BuiltInEvent::ReadOk { in_reply_to, .. }
-                | BuiltInEvent::WriteOk { in_reply_to, .. }
-                | BuiltInEvent::CasOk { in_reply_to, .. }
-                | BuiltInEvent::Error { in_reply_to, .. } => in_reply_to,
-            },
         }
     }
 }

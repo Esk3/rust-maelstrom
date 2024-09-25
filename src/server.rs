@@ -78,14 +78,16 @@ where
         Res: Send + 'static,
     {
         //TODO this error gets ignored. only the builtin error message gets displayed
-        let input = if let Ok(input) = serde_json::from_str::<Message<T>>(line) {
-            Event::Maelstrom(input)
-        } else {
-            let event = serde_json::from_str::<Message<BuiltInEvent>>(line)
-                .with_context(|| format!("Found unknown input {line}"))?;
-            Event::BuiltIn(event)
-        };
+        // let input = if let Ok(input) = serde_json::from_str::<Message<T>>(line) {
+        //     Event::Maelstrom(input)
+        // // } else {
+        //     let event = serde_json::from_str::<Message<BuiltInEvent>>(line)
+        //         .with_context(|| format!("Found unknown input {line}"))?;
+        //     Event::BuiltIn(event)
+        // };
 
+        let input = serde_json::from_str::<Message<T>>(line).with_context(|| format!("Found unknown input {line}"))?;
+        let input = Event::Maelstrom(input);
         let input = HandlerInput {
             event: input,
             node,

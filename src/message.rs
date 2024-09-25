@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::{BuiltInEvent, EventBroker, EventId};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message<T> {
     pub src: String,
     pub dest: String,
