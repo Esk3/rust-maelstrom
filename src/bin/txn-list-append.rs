@@ -103,17 +103,14 @@ async fn handle_txn(
                 Txn::Read(r, key, Some(values))
             }
             Txn::Append(a, key, new_value) => {
-                dbg!(&new_tree, &new_value);
                 new_tree
                     .entry(key.to_string())
                     .or_default()
                     .push(new_value.clone());
-                dbg!(&new_tree, &new_value);
                 Txn::Append(a, key, new_value)
             }
         })
         .collect();
-    dbg!(&old_tree, &new_tree);
     lin_kv_client.cas(0, old_tree, new_tree).await.map(|()| txn)
 }
 
