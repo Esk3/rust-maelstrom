@@ -126,6 +126,54 @@ where
             )),
         }
     }
+    pub async fn cas<K, V>(&self, key: K, from: V, to: V) -> Result<(), error::Error>
+    where
+        K: Serialize,
+        V: Serialize,
+        T: ExtractInput<ReturnValue = V>,
+    {
+        let msg_id = self.event_broker.get_id_counter().next_id();
+        let message = Message {
+            src: self.node_id.clone(),
+            dest: "lin-kv".to_string(),
+            body: LinKvOutput::Cas {
+                key,
+                from,
+                to,
+                msg_id,
+            },
+        };
+        let listner = self.event_broker.subscribe(msg_id);
+        message
+            .send(std::io::stdout())
+            // TODO msg_id is wrong.
+            .map_err(|_| error::Error::crash_with_message("error writing to stdout", msg_id))?;
+        match listner.await {
+            Ok(Event::Injected(message)) => match message.body.extract_input() {
+                Some(LinKvInput::CasOk { in_reply_to: _ }) => Ok(()),
+                Some(LinKvInput::Error {
+                    code,
+                    text,
+                    in_reply_to,
+                }) => Err(error::Error::new(code, text, in_reply_to)),
+                Some(
+                    LinKvInput::WriteOk { in_reply_to } | LinKvInput::ReadOk { in_reply_to, .. },
+                ) => Err(error::Error::crash_with_message(
+                    "expected write ok",
+                    in_reply_to,
+                )),
+                None => todo!(),
+            },
+            Ok(Event::Maelstrom(_)) => Err(error::Error::crash_with_message(
+                "expected injected message",
+                /* TODO in_reply_to  */ 0,
+            )),
+            Err(e) => Err(error::Error::crash_with_message(
+                format!("recv dropped?: {e:?}"),
+                /* TODO in_reply_to */ 0,
+            )),
+        }
+    }
 }
 
 pub trait ExtractInput {

@@ -1,11 +1,15 @@
 use rust_maelstrom::{
+    error,
     event::{self, Event, EventBroker},
     maelstrom_service::lin_kv::{ExtractInput, LinKv, LinKvInput},
     message::Message,
     server::{HandlerInput, HandlerResponse, Server},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -60,10 +64,15 @@ async fn handle_message(
     match body {
         Input::Txn { msg_id, txn } => {
             let txn = handle_txn(node, txn, event_broker).await;
-            Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
-                in_reply_to: msg_id,
-                txn,
-            })))
+            match txn {
+                Ok(txn) => Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
+                    in_reply_to: msg_id,
+                    txn,
+                }))),
+                Err(error) => Ok(HandlerResponse::Error(
+                    reply.with_body(error.set_in_reply_to(msg_id)),
+                )),
+            }
         }
         Input::LinKv(_) => Ok(HandlerResponse::Event(Event::Injected(
             reply.into_reply().0.with_body(body),
@@ -75,29 +84,37 @@ async fn handle_txn(
     node: Arc<Mutex<Node>>,
     txn: Vec<Txn>,
     event_broker: EventBroker<Input>,
-) -> Vec<Txn> {
+) -> Result<Vec<Txn>, error::Error> {
     let node_id;
     {
         let node = node.lock().unwrap();
         node_id = node.id.clone();
     }
-    let mut result = Vec::new();
     let lin_kv_client = LinKv::new(node_id.clone(), event_broker.clone());
-    for op in txn {
-        match op {
+    let old_tree = lin_kv_client.read_or_default(0).await.unwrap();
+    let mut new_tree = old_tree.clone();
+    let txn = txn
+        .into_iter()
+        .map(|op| match op {
             Txn::Read(r, key, _) => {
-                let value = lin_kv_client.read_or_default(key.clone()).await.unwrap();
-                result.push(Txn::Read(r, key, Some(value)));
+                // to string because serde_json::value::String(x) != serde_json::value::Number(x).
+                // but to maelstrom "1" == 1
+                let values = new_tree.entry(key.to_string()).or_default().clone();
+                Txn::Read(r, key, Some(values))
             }
             Txn::Append(a, key, new_value) => {
-                let mut values = lin_kv_client.read_or_default(key.clone()).await.unwrap();
-                values.push(new_value.clone());
-                lin_kv_client.write(key.clone(), values).await.unwrap();
-                result.push(Txn::Append(a, key, new_value));
+                dbg!(&new_tree, &new_value);
+                new_tree
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(new_value.clone());
+                dbg!(&new_tree, &new_value);
+                Txn::Append(a, key, new_value)
             }
-        }
-    }
-    result
+        })
+        .collect();
+    dbg!(&old_tree, &new_tree);
+    lin_kv_client.cas(0, old_tree, new_tree).await.map(|()| txn)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -108,14 +125,14 @@ enum Input {
         txn: Vec<Txn>,
     },
     #[serde(untagged)]
-    LinKv(LinKvInput<Vec<serde_json::Value>>),
+    LinKv(LinKvInput<HashMap<String, Vec<serde_json::Value>>>),
 }
 
 impl ExtractInput for Input {
-    type ReturnValue = Vec<serde_json::Value>;
+    type ReturnValue = HashMap<String, Vec<serde_json::Value>>;
     fn extract_input(self) -> Option<LinKvInput<Self::ReturnValue>> {
         match self {
-            Input::Txn {..} => None,
+            Input::Txn { .. } => None,
             Input::LinKv(lin_kv) => Some(lin_kv),
         }
     }
@@ -128,7 +145,8 @@ impl event::EventId for Input {
             Input::LinKv(lin_kv) => match lin_kv {
                 LinKvInput::ReadOk { in_reply_to, .. }
                 | LinKvInput::WriteOk { in_reply_to }
-                | LinKvInput::Error { in_reply_to, .. } => *in_reply_to,
+                | LinKvInput::Error { in_reply_to, .. }
+                | LinKvInput::CasOk { in_reply_to } => *in_reply_to,
             },
         }
     }
@@ -141,7 +159,8 @@ impl rust_maelstrom::message::MessageId for Input {
             Input::LinKv(lin_kv) => match lin_kv {
                 LinKvInput::ReadOk { in_reply_to, .. }
                 | LinKvInput::WriteOk { in_reply_to }
-                | LinKvInput::Error { in_reply_to, .. } => *in_reply_to,
+                | LinKvInput::Error { in_reply_to, .. }
+                | LinKvInput::CasOk { in_reply_to } => *in_reply_to,
             },
         }
     }

@@ -108,6 +108,7 @@ where
     {
         match handler_response {
             HandlerResponse::Response(response) => response.send(std::io::stdout().lock()),
+            HandlerResponse::Error(error) => error.send(std::io::stdout().lock()),
             HandlerResponse::Event(event) => event_broker.publish_event(event),
             HandlerResponse::None => Ok(()),
         }
@@ -151,6 +152,7 @@ where
 #[derive(Debug)]
 pub enum HandlerResponse<Res, T: EventId + Clone> {
     Response(Res),
+    Error(Message<crate::error::Error>),
     Event(Event<T>),
     None,
 }
