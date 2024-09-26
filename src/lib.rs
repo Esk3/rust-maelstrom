@@ -5,6 +5,7 @@ pub mod id_counter;
 pub mod input;
 pub mod maelstrom_service;
 pub mod message;
+mod new_event;
 pub mod server;
 pub mod service;
 
