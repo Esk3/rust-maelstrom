@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Error {
-    error: ErrorTag,
+    #[serde(rename="type")]
+    error_tag: ErrorTag,
     in_reply_to: usize,
     code: ErrorCode,
     text: String,
@@ -21,7 +22,7 @@ impl Error {
 
     pub fn new(code: impl Into<ErrorCode>, text: impl Into<String>, in_reply_to: usize) -> Self {
         Self {
-            error: ErrorTag::Error,
+            error_tag: ErrorTag::Error,
             in_reply_to,
             code: code.into(),
             text: text.into(),
@@ -41,6 +42,13 @@ impl Error {
     #[must_use]
     pub fn in_reply_to(&self) -> usize {
         self.in_reply_to
+    }
+    #[must_use]
+    pub fn set_in_reply_to(self, in_reply_to: usize) -> Self {
+        Self {
+            in_reply_to,
+            ..self
+        }
     }
 }
 
@@ -67,6 +75,7 @@ pub enum ErrorCode {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
 pub enum ErrorTag {
     Error,
 }
