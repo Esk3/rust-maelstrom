@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Error {
-    #[serde(rename="type")]
+    #[serde(rename = "type")]
     error_tag: ErrorTag,
     in_reply_to: usize,
     code: ErrorCode,
@@ -52,7 +52,7 @@ impl Error {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ErrorCode {
     #[serde(rename = "0")]
     Timeout,
@@ -74,8 +74,8 @@ pub enum ErrorCode {
     TxnConflict,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all="snake_case")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorTag {
     Error,
 }

@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
 use crate::message::Message;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event<I, T>
 where
     Message<I>: IntoMessageId,
@@ -22,6 +22,7 @@ enum MessageType<I> {
 }
 enum BuiltInMessage {}
 
+#[derive(Debug)]
 enum SubscribeOption<I, T>
 where
     Message<I>: IntoMessageId,
@@ -46,8 +47,8 @@ impl<I, T> EventHandler<I, T>
 where
     Message<I>: IntoMessageId,
     Message<T>: IntoMessageId,
-    T: Send + 'static,
-    I: Send + 'static,
+    T: Send + 'static + Debug,
+    I: Send + 'static + Debug,
 {
     pub fn new() -> Self {
         let (new_subscriber_tx, new_subscriber_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -118,8 +119,10 @@ where
 
 impl<I, T> EventWorker<I, T>
 where
-    Message<I>: IntoMessageId,
-    Message<T>: IntoMessageId,
+    Message<I>: IntoMessageId + Debug,
+    Message<T>: IntoMessageId + Debug,
+    I: Debug,
+    T: Debug,
 {
     fn new(
         new_subscriber_rx: tokio::sync::mpsc::UnboundedReceiver<(MessageId, SubscribeOption<I, T>)>,
@@ -141,7 +144,10 @@ where
                 Some(new_event) = self.new_event_rx.recv() => {
                     self.new_event(new_event);
                 }
-                else => panic!("am i closed now?")
+                else => {
+                    dbg!("her");
+                    panic!("am i closed now?")
+                }
 
             }
         }
@@ -155,7 +161,7 @@ where
             Event::MessageSent(ref msg) => msg.into_message_id(),
             Event::Error(_) => todo!(),
         };
-        if let Some(sub) = self.subscriptions.remove(&message_id) {
+        if let Some(sub) = self.subscriptions.get(&message_id) {
             match (sub, event) {
                 (
                     SubscribeOption::MessageRecived(tx),
@@ -163,7 +169,9 @@ where
                 ) => {
                     tx.send(body).unwrap();
                 }
-                (SubscribeOption::MessageRecived(_), _) => todo!(),
+                (SubscribeOption::MessageRecived(_), _) => {
+                    dbg!("here");
+                }
                 (SubscribeOption::MessageSent(tx), Event::MessageSent(Message { body, .. })) => {
                     tx.send(body).unwrap();
                 }
@@ -189,7 +197,7 @@ pub trait IntoMessageId: Send + Sync {
     fn into_message_id(&self) -> MessageId;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum MockMsgBody {
     DoSomething,
     DoNothing,
@@ -210,16 +218,53 @@ impl IntoMessageId for Message<MockMsgBody> {
 }
 
 #[tokio::test]
-async fn test() {
-    let handler = EventHandler::new();
-    let message = Message {
-        src: "testsrc".to_string(),
-        dest: "testdest".to_string(),
-        body: MockMsgBody::DoSomething,
-    };
-    let mut listner = handler.subscribe(&message);
-    let event: Event<MockMsgBody, MockMsgBody> = Event::MessageRecived(message);
-    handler.publish_event(event);
-    dbg!(listner.recv().await);
-    panic!();
+async fn event_test() {
+    let res = tokio::time::timeout(std::time::Duration::from_secs(1), async move {
+        let handler = EventHandler::new();
+        let message = Message {
+            src: "testsrc".to_string(),
+            dest: "testdest".to_string(),
+            body: MockMsgBody::DoSomething,
+        };
+        let mut listner = handler.subscribe(&message);
+        let event: Event<MockMsgBody, MockMsgBody> = Event::MessageRecived(message.clone());
+        handler.publish_event(event);
+        let recv = dbg!(listner.recv().await).unwrap();
+        assert_eq!(recv, Event::MessageRecived(message));
+    })
+    .await;
+    dbg!(res.unwrap());
+}
+
+#[tokio::test]
+async fn specific_event_test() {
+    let res = tokio::time::timeout(std::time::Duration::from_secs(1), async move {
+        let handler = EventHandler::new();
+        let message = Message {
+            src: "testsrc".to_string(),
+            dest: "testdest".to_string(),
+            body: MockMsgBody::DoSomething,
+        };
+
+        let mut listner = handler.subscribe_message_recived(&message);
+        handler.publish_event(Event::MessageSent(message.clone()));
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let x = listner.try_recv();
+
+        match x {
+            Ok(_) => panic!(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => panic!(),
+            _ => (),
+        };
+
+        handler.publish_event(Event::MessageRecived(message.clone()));
+
+        let y = listner.recv().await;
+
+        assert!(matches!(y, Some(MockMsgBody::DoSomething)));
+    })
+    .await;
+    dbg!(res).unwrap();
 }
