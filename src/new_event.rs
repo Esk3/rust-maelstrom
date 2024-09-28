@@ -29,6 +29,7 @@ enum SubscribeOption<I, T> {
     Error(tokio::sync::mpsc::UnboundedSender<crate::error::Error>),
 }
 
+#[derive(Debug, Clone)]
 pub struct EventHandler<I, T, Id> {
     new_subscriber_tx: tokio::sync::mpsc::UnboundedSender<(MessageId<Id>, SubscribeOption<I, T>)>,
     new_event_tx: tokio::sync::mpsc::UnboundedSender<Event<I, T>>,
@@ -40,6 +41,7 @@ where
     T: IntoBodyId<Id> + Send + 'static + Debug,
     Id: Send + Sync + Debug + Clone + Eq + PartialEq + Hash + 'static,
 {
+    #[must_use]
     pub fn new() -> Self {
         let (new_subscriber_tx, new_subscriber_rx) = tokio::sync::mpsc::unbounded_channel();
         let (new_event_tx, new_event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -49,6 +51,18 @@ where
             new_subscriber_tx,
             new_event_tx,
         }
+    }
+    #[must_use]
+    pub fn new_with_fallback() -> (Self, tokio::sync::mpsc::UnboundedReceiver<Event<I,T>>) {
+        let (new_subscriber_tx, new_subscriber_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (new_event_tx, new_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (fallback_tx, fallback_rx) = tokio::sync::mpsc::unbounded_channel();
+        let worker = EventWorker::new_with_fallback(new_subscriber_rx, new_event_rx, fallback_tx);
+        tokio::spawn(async move { worker.run().await });
+        (Self {
+            new_subscriber_tx,
+            new_event_tx,
+        }, fallback_rx)
     }
     pub fn publish_event(&self, event: Event<I, T>) -> anyhow::Result<()> {
         self.new_event_tx
@@ -111,10 +125,22 @@ where
         Ok(rx)
     }
 }
+
+impl<I, T, Id> Default for EventHandler<I, T, Id>
+where
+    I: IntoBodyId<Id> + Send + 'static + Debug,
+    T: IntoBodyId<Id> + Send + 'static + Debug,
+    Id: Send + Sync + Debug + Clone + Eq + PartialEq + Hash + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
 struct EventWorker<I, T, Id> {
     new_subscriber_rx: tokio::sync::mpsc::UnboundedReceiver<(MessageId<Id>, SubscribeOption<I, T>)>,
     new_event_rx: tokio::sync::mpsc::UnboundedReceiver<Event<I, T>>,
     subscriptions: HashMap<MessageId<Id>, SubscribeOption<I, T>>,
+    fallback: Option<tokio::sync::mpsc::UnboundedSender<Event<I, T>>>,
 }
 
 impl<I, T, Id> EventWorker<I, T, Id>
@@ -137,6 +163,23 @@ where
             new_subscriber_rx,
             new_event_rx,
             subscriptions: HashMap::new(),
+            fallback: None,
+        }
+    }
+
+    fn new_with_fallback(
+        new_subscriber_rx: tokio::sync::mpsc::UnboundedReceiver<(
+            MessageId<Id>,
+            SubscribeOption<I, T>,
+        )>,
+        new_event_rx: tokio::sync::mpsc::UnboundedReceiver<Event<I, T>>,
+        fallback: tokio::sync::mpsc::UnboundedSender<Event<I, T>>,
+    ) -> Self {
+        Self {
+            new_subscriber_rx,
+            new_event_rx,
+            subscriptions: HashMap::new(),
+            fallback: Some(fallback),
         }
     }
 
@@ -198,6 +241,10 @@ where
                     let _ = tx.send(event);
                     let _ = self.subscriptions.remove(&message_id);
                 }
+            }
+        } else if let Some(fallback) = &self.fallback {
+            if let Err(_) = fallback.send(event) {
+                let _ = self.fallback.take();
             }
         }
     }
