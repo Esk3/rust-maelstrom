@@ -62,6 +62,10 @@ pub enum NodeResponse<I, T> {
 
 #[cfg(test)]
 mod test {
+    use std::io::Write;
+
+    use crate::message::{InitRequest, InitResponse};
+
     use super::*;
     #[derive(Debug, Clone)]
     struct TestNode;
@@ -108,7 +112,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test() {
+    async fn node_test() {
         let node = TestNode::init("testnode".to_string(), Vec::new(), ());
         let msg = Message {
             src: "tester".to_string(),
@@ -119,7 +123,32 @@ mod test {
         let my_event = Event::MessageRecived(msg.clone());
         node.on_event(my_event, event_handler.clone());
 
-        let x = node.handle_message_recived(msg, event_handler).await;
-        panic!("{x:?}");
+        let _ = node.handle_message_recived(msg, event_handler).await;
+    }
+
+    #[tokio::test]
+    async fn node_handler_test() {
+        let init_line = Message {
+            src: "init_node".to_string(),
+            dest: "test_node_from_init".to_string(),
+            body: InitRequest::Init { msg_id: 123, node_id: "init_msg_node_id".to_string(), node_ids: Vec::new() },
+        };
+        let mut input = std::io::Cursor::new(Vec::new());
+        init_line.send(&mut input).unwrap();
+        input.write_all(b"\n").unwrap();
+        input.set_position(0);
+        let mut output = std::io::Cursor::new(Vec::new());
+        let handler = crate::node_handler::NodeHandler::<A, B, TestNode, _>::init_with_io(
+            &mut input,
+            &mut output,
+        )
+        .await;
+        output.set_position(0);
+        let response = serde_json::from_reader::<_, Message<InitResponse>>(&mut output).unwrap();
+        assert_eq!(response, Message {
+            src: "test_node_from_init".to_string(),
+            dest: "init_node".to_string(),
+            body: InitResponse::InitOk { in_reply_to: 123 }
+        });
     }
 }

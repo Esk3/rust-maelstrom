@@ -153,7 +153,7 @@ where
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InitRequest {
     Init {
@@ -162,7 +162,7 @@ pub enum InitRequest {
         node_ids: Vec<String>,
     },
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InitResponse {
     InitOk { in_reply_to: usize },
