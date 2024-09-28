@@ -1,54 +1,58 @@
 #![allow(dead_code)]
 
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use crate::message::Message;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event<I, T>
+pub enum Event<I, T, Id>
 where
-    Message<I>: IntoMessageId,
-    Message<T>: IntoMessageId,
+    Message<I>: IntoMessageId<Id>,
+    Message<T>: IntoMessageId<Id>,
 {
     MessageRecived(Message<I>),
     MessageSent(Message<T>),
-    // maybe wrap in message, or seperate ErrorMessage variant
+    // maybe wrap in message, or add seperate ErrorMessage variant
     Error(crate::error::Error),
+    A(Id),
 }
 
 enum MessageType<I> {
     NodeMessage(I),
     BuiltinMessage(BuiltInMessage),
 }
+
 enum BuiltInMessage {}
 
 #[derive(Debug)]
-enum SubscribeOption<I, T>
+enum SubscribeOption<I, T, Id>
 where
-    Message<I>: IntoMessageId,
-    Message<T>: IntoMessageId,
+    Message<I>: IntoMessageId<Id>,
+    Message<T>: IntoMessageId<Id>,
 {
-    None(tokio::sync::mpsc::UnboundedSender<Event<I, T>>),
+    None(tokio::sync::mpsc::UnboundedSender<Event<I, T, Id>>),
     MessageRecived(tokio::sync::mpsc::UnboundedSender<I>),
     MessageSent(tokio::sync::mpsc::UnboundedSender<T>),
     Error(tokio::sync::mpsc::UnboundedSender<crate::error::Error>),
 }
 
-pub struct EventHandler<I, T>
+pub struct EventHandler<I, T, Id>
 where
-    Message<I>: IntoMessageId,
-    Message<T>: IntoMessageId,
+    Message<I>: IntoMessageId<Id>,
+    Message<T>: IntoMessageId<Id>,
 {
-    new_subscriber_tx: tokio::sync::mpsc::UnboundedSender<(MessageId, SubscribeOption<I, T>)>,
-    new_event_tx: tokio::sync::mpsc::UnboundedSender<Event<I, T>>,
+    new_subscriber_tx:
+        tokio::sync::mpsc::UnboundedSender<(MessageId<Id>, SubscribeOption<I, T, Id>)>,
+    new_event_tx: tokio::sync::mpsc::UnboundedSender<Event<I, T, Id>>,
 }
 
-impl<I, T> EventHandler<I, T>
+impl<I, T, Id> EventHandler<I, T, Id>
 where
-    Message<I>: IntoMessageId,
-    Message<T>: IntoMessageId,
+    Message<I>: IntoMessageId<Id>,
+    Message<T>: IntoMessageId<Id>,
     T: Send + 'static + Debug,
     I: Send + 'static + Debug,
+    Id: Send + Sync + Debug + Clone + Eq + PartialEq + Hash + 'static,
 {
     pub fn new() -> Self {
         let (new_subscriber_tx, new_subscriber_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -60,73 +64,82 @@ where
             new_event_tx,
         }
     }
-    pub fn publish_event(&self, event: Event<I, T>) {
+    pub fn publish_event(&self, event: Event<I, T, Id>) {
         self.new_event_tx.send(event).unwrap();
     }
     pub fn subscribe(
         &self,
-        message_id: &impl IntoMessageId,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<Event<I, T>> {
+        message_id: &impl IntoMessageId<Id>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<Event<I, T, Id>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.new_subscriber_tx
-            .send((message_id.into_message_id(), SubscribeOption::None(tx)));
+        self.new_subscriber_tx.send((
+            message_id.clone_into_message_id(),
+            SubscribeOption::None(tx),
+        ));
         rx
     }
-    pub fn subscribe_once(&self) -> Event<I, T> {
+    pub fn subscribe_once(&self) -> Event<I, T, Id> {
         todo!()
     }
     pub fn subscribe_message_recived(
         &self,
-        message_id: &impl IntoMessageId,
+        message_id: &impl IntoMessageId<Id>,
     ) -> tokio::sync::mpsc::UnboundedReceiver<I> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.new_subscriber_tx.send((
-            message_id.into_message_id(),
+            message_id.clone_into_message_id(),
             SubscribeOption::MessageRecived(tx),
         ));
         rx
     }
     pub fn subscribe_message_sent(
         &self,
-        message_id: &impl IntoMessageId,
+        message_id: &impl IntoMessageId<Id>,
     ) -> tokio::sync::mpsc::UnboundedReceiver<T> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.new_subscriber_tx.send((
-            message_id.into_message_id(),
+            message_id.clone_into_message_id(),
             SubscribeOption::MessageSent(tx),
         ));
         rx
     }
     pub fn subscribe_error(
         &self,
-        message_id: &impl IntoMessageId,
+        message_id: &impl IntoMessageId<Id>,
     ) -> tokio::sync::mpsc::UnboundedReceiver<crate::error::Error> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.new_subscriber_tx
-            .send((message_id.into_message_id(), SubscribeOption::Error(tx)));
+        self.new_subscriber_tx.send((
+            message_id.clone_into_message_id(),
+            SubscribeOption::Error(tx),
+        ));
         rx
     }
 }
-struct EventWorker<I, T>
+struct EventWorker<I, T, Id>
 where
-    Message<I>: IntoMessageId,
-    Message<T>: IntoMessageId,
+    Message<I>: IntoMessageId<Id>,
+    Message<T>: IntoMessageId<Id>,
 {
-    new_subscriber_rx: tokio::sync::mpsc::UnboundedReceiver<(MessageId, SubscribeOption<I, T>)>,
-    new_event_rx: tokio::sync::mpsc::UnboundedReceiver<Event<I, T>>,
-    subscriptions: HashMap<MessageId, SubscribeOption<I, T>>,
+    new_subscriber_rx:
+        tokio::sync::mpsc::UnboundedReceiver<(MessageId<Id>, SubscribeOption<I, T, Id>)>,
+    new_event_rx: tokio::sync::mpsc::UnboundedReceiver<Event<I, T, Id>>,
+    subscriptions: HashMap<MessageId<Id>, SubscribeOption<I, T, Id>>,
 }
 
-impl<I, T> EventWorker<I, T>
+impl<I, T, Id> EventWorker<I, T, Id>
 where
-    Message<I>: IntoMessageId + Debug,
-    Message<T>: IntoMessageId + Debug,
+    Message<I>: IntoMessageId<Id> + Debug,
+    Message<T>: IntoMessageId<Id> + Debug,
     I: Debug,
     T: Debug,
+    Id: Hash + PartialEq + Eq + Clone,
 {
     fn new(
-        new_subscriber_rx: tokio::sync::mpsc::UnboundedReceiver<(MessageId, SubscribeOption<I, T>)>,
-        new_event_rx: tokio::sync::mpsc::UnboundedReceiver<Event<I, T>>,
+        new_subscriber_rx: tokio::sync::mpsc::UnboundedReceiver<(
+            MessageId<Id>,
+            SubscribeOption<I, T, Id>,
+        )>,
+        new_event_rx: tokio::sync::mpsc::UnboundedReceiver<Event<I, T, Id>>,
     ) -> Self {
         Self {
             new_subscriber_rx,
@@ -152,14 +165,19 @@ where
             }
         }
     }
-    fn new_subscriber(&mut self, message_id: MessageId, subscriber_option: SubscribeOption<I, T>) {
+    fn new_subscriber(
+        &mut self,
+        message_id: MessageId<Id>,
+        subscriber_option: SubscribeOption<I, T, Id>,
+    ) {
         self.subscriptions.insert(message_id, subscriber_option);
     }
-    fn new_event(&mut self, event: Event<I, T>) {
+    fn new_event(&mut self, event: Event<I, T, Id>) {
         let message_id = match event {
-            Event::MessageRecived(ref msg) => msg.into_message_id(),
-            Event::MessageSent(ref msg) => msg.into_message_id(),
+            Event::MessageRecived(ref msg) => msg.clone_into_message_id(),
+            Event::MessageSent(ref msg) => msg.clone_into_message_id(),
             Event::Error(_) => todo!(),
+            _ => todo!(),
         };
         if let Some(sub) = self.subscriptions.get(&message_id) {
             match (sub, event) {
@@ -168,50 +186,109 @@ where
                     Event::MessageRecived(Message { body, .. }),
                 ) => {
                     tx.send(body).unwrap();
+                    let _ = self.subscriptions.remove(&message_id);
                 }
                 (SubscribeOption::MessageRecived(_), _) => {
                     dbg!("here");
                 }
                 (SubscribeOption::MessageSent(tx), Event::MessageSent(Message { body, .. })) => {
                     tx.send(body).unwrap();
+                    let _ = self.subscriptions.remove(&message_id);
                 }
                 (SubscribeOption::MessageSent(_), _) => todo!(),
                 (SubscribeOption::Error(_), Event::Error(_)) => todo!(),
                 (SubscribeOption::Error(_), _) => todo!(),
                 (SubscribeOption::None(tx), event) => {
                     tx.send(event).unwrap();
+                    let _ = self.subscriptions.remove(&message_id);
                 }
             }
         }
     }
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
-pub struct MessageId {
+#[derive(Debug, Eq, Hash, PartialEq, Clone)]
+pub struct BodyId<T>(T);
+
+pub trait IntoBodyId<T>: Send + Sync + Debug + PartialEq + Eq + Hash
+where
+    T: Send + Sync + Debug + PartialEq + Eq + Hash,
+{
+    fn into_body_id(self) -> BodyId<T>;
+    fn clone_into_body_id(&self) -> BodyId<T>;
+}
+
+#[derive(Debug, Eq, Hash, PartialEq, Clone)]
+pub struct MessageId<T> {
     src: String,
     dest: String,
-    id: usize,
+    id: BodyId<T>,
 }
 
-pub trait IntoMessageId: Send + Sync {
-    fn into_message_id(&self) -> MessageId;
+pub trait IntoMessageId<T>: Send + Sync {
+    fn into_message_id(self) -> MessageId<T>;
+    fn clone_into_message_id(&self) -> MessageId<T>
+    where
+        T: Clone;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl<T> IntoMessageId<T> for MessageId<T>
+where
+    T: Send + Sync + Debug,
+{
+    fn into_message_id(self) -> MessageId<T> {
+        self
+    }
+
+    fn clone_into_message_id(&self) -> MessageId<T>
+    where
+        T: Clone,
+    {
+        self.clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum MockMsgBody {
     DoSomething,
     DoNothing,
 }
 
-impl IntoMessageId for Message<MockMsgBody> {
-    fn into_message_id(&self) -> MessageId {
-        let id = match self.body {
-            MockMsgBody::DoSomething => 1,
-            MockMsgBody::DoNothing => 2,
-        };
+impl IntoBodyId<usize> for MockMsgBody {
+    fn into_body_id(self) -> BodyId<usize> {
+        match self {
+            MockMsgBody::DoSomething => BodyId(1),
+            MockMsgBody::DoNothing => BodyId(2),
+        }
+    }
+
+    fn clone_into_body_id(&self) -> BodyId<usize> {
+        match self {
+            MockMsgBody::DoSomething => BodyId(1),
+            MockMsgBody::DoNothing => BodyId(2),
+        }
+    }
+}
+
+impl<T, ID> IntoMessageId<T> for Message<ID>
+where
+    ID: IntoBodyId<T>,
+    T: Send + Sync + Debug + Hash + PartialEq + Eq,
+{
+    fn clone_into_message_id(&self) -> MessageId<T> {
+        let id = self.body.clone_into_body_id();
         MessageId {
             src: self.src.clone(),
             dest: self.dest.clone(),
+            id,
+        }
+    }
+
+    fn into_message_id(self) -> MessageId<T> {
+        let id = self.body.into_body_id();
+        MessageId {
+            src: self.src,
+            dest: self.dest,
             id,
         }
     }
@@ -227,7 +304,7 @@ async fn event_test() {
             body: MockMsgBody::DoSomething,
         };
         let mut listner = handler.subscribe(&message);
-        let event: Event<MockMsgBody, MockMsgBody> = Event::MessageRecived(message.clone());
+        let event: Event<MockMsgBody, MockMsgBody, usize> = Event::MessageRecived(message.clone());
         handler.publish_event(event);
         let recv = dbg!(listner.recv().await).unwrap();
         assert_eq!(recv, Event::MessageRecived(message));
