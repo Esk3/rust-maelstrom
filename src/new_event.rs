@@ -53,16 +53,19 @@ where
         }
     }
     #[must_use]
-    pub fn new_with_fallback() -> (Self, tokio::sync::mpsc::UnboundedReceiver<Event<I,T>>) {
+    pub fn new_with_fallback() -> (Self, tokio::sync::mpsc::UnboundedReceiver<Event<I, T>>) {
         let (new_subscriber_tx, new_subscriber_rx) = tokio::sync::mpsc::unbounded_channel();
         let (new_event_tx, new_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (fallback_tx, fallback_rx) = tokio::sync::mpsc::unbounded_channel();
         let worker = EventWorker::new_with_fallback(new_subscriber_rx, new_event_rx, fallback_tx);
         tokio::spawn(async move { worker.run().await });
-        (Self {
-            new_subscriber_tx,
-            new_event_tx,
-        }, fallback_rx)
+        (
+            Self {
+                new_subscriber_tx,
+                new_event_tx,
+            },
+            fallback_rx,
+        )
     }
     pub fn publish_event(&self, event: Event<I, T>) -> anyhow::Result<()> {
         self.new_event_tx
@@ -251,7 +254,7 @@ where
 }
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
-pub struct BodyId<T>(T);
+pub struct BodyId<T>(pub T);
 
 pub trait IntoBodyId<T>: Send + Sync + Debug + PartialEq + Eq + Hash
 where

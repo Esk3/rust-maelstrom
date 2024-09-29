@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, hash::Hash};
 use tokio::io::AsyncBufReadExt;
@@ -6,20 +6,21 @@ use tokio::io::AsyncBufReadExt;
 use crate::{
     message::{InitRequest, Message},
     new_event::{self, EventHandler},
+    node::NodeResponse,
 };
 
 pub struct NodeHandler<I, T, N, Id> {
     node: N,
     event_handler: EventHandler<I, T, Id>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<new_event::Event<I, T>>,
+    tasks: tokio::task::JoinSet<Result<anyhow::Result<NodeResponse<I, T>>, tokio::task::JoinError>>,
 }
 
-impl<I, T, N, Id> NodeHandler<I, T, N, usize>
+impl<I, T, N> NodeHandler<I, T, N, usize>
 where
-    N: crate::node::Node<I, T> + Clone + Sync + Send,
-    T: new_event::IntoBodyId<Id> + 'static + Clone + Serialize,
-    I: new_event::IntoBodyId<Id> + 'static + DeserializeOwned + Clone,
-    Id: Hash + Eq + PartialEq + Debug + Clone + Sync + Send + 'static,
+    N: crate::node::Node<I, T> + Clone + Sync + Send + 'static,
+    T: new_event::IntoBodyId<usize> + 'static + Clone + Serialize,
+    I: new_event::IntoBodyId<usize> + 'static + DeserializeOwned + Clone,
 {
     pub async fn init() -> anyhow::Result<Self> {
         Self::init_with_io(tokio::io::stdin(), std::io::stdout().lock()).await
@@ -36,6 +37,7 @@ where
             node,
             event_handler,
             event_rx,
+            tasks: tokio::task::JoinSet::new(),
         })
     }
 
@@ -84,34 +86,86 @@ where
     }
 
     pub async fn run(self) {
-        self.run_with_io(tokio::io::stdin(), std::io::stdout().lock())
+        self.run_with_io(tokio::io::stdin(), std::io::stdout())
             .await;
     }
 
-    pub async fn run_with_io<R, W>(mut self, reader: R, writer: W)
+    pub async fn run_with_io<R, W>(mut self, reader: R, mut writer: W)
     where
         R: tokio::io::AsyncRead + std::marker::Unpin,
-        W: std::io::Write,
+        W: std::io::Write + Send,
     {
         let mut lines = tokio::io::BufReader::new(reader).lines();
-        self.event_rx.recv().await;
-        tokio::select! {
-            line = lines.next_line() => {
-                self.on_new_line(line);
-            },
-            event = self.event_rx.recv() => {
-                self.handle_event(event, writer);
+        loop {
+            dbg!("starting loop");
+            dbg!(&self.tasks);
+            tokio::select! {
+                Ok(Some(line)) = lines.next_line() => {
+                    if let Err(_) = self.on_new_line(line) {
+                        break;
+                    }
+                },
+                event = self.event_rx.recv() => {
+                    self.handle_event(event, &mut writer);
+                }
+                Some(task) = self.tasks.join_next() => {
+                    Self::on_task_complete(task.unwrap(), &mut writer);
+                }
+                else => {
+                    panic!("got else?");
+                }
             }
         }
+        while self.tasks.join_next().await.is_some() {}
     }
 
-    fn on_new_line(&self, line: Result<Option<String>, std::io::Error>) {
-        let input_message = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
-        let event = new_event::Event::MessageRecived(input_message);
-        self.event_handler.publish_event(event);
+    fn on_new_line(&self, line: String) -> anyhow::Result<()> {
+        let value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(e) => {
+                dbg!("failed to parse line", &line, &e);
+                bail!("failed to parse line {line:?}: {e}");
+            }
+        };
+        dbg!(&line);
+        let event = new_event::Event::MessageRecived(value);
+        dbg!(&event);
+        self.event_handler.publish_event(event).unwrap();
+        Ok(())
     }
-    fn handle_event<W>(self, event: Option<new_event::Event<I, T>>, writer: W) {
-        self.node
-            .on_event(event.unwrap(), self.event_handler.clone(), writer);
+    fn handle_event<W>(&mut self, event: Option<new_event::Event<I, T>>, writer: W)
+    where
+        W: std::io::Write + Send,
+    {
+        let join_handle = self
+            .node
+            .on_event(event.unwrap(), self.event_handler.clone());
+        self.tasks.spawn(join_handle);
+    }
+
+    fn on_task_complete<W>(
+        task: Result<anyhow::Result<NodeResponse<I, T>>, tokio::task::JoinError>,
+        writer: W,
+    ) -> anyhow::Result<()> where
+        W: std::io::Write,
+    {
+        let response = task.unwrap();
+        match response {
+            Ok(NodeResponse::Event(e)) => todo!("got event {e:?}"),
+            Ok(NodeResponse::Message(message)) => message
+                .send(writer)
+                .context("failed to write to stdout")?,
+            Ok(NodeResponse::Reply(message)) => {
+                let (reply, body) = message.into_reply();
+                reply
+                    .with_body(body)
+                    .send(writer)
+                    .context("failed to write to stdout")?;
+            }
+            Ok(NodeResponse::Error(e)) => todo!("got node error: {e:?}"),
+            Ok(NodeResponse::None) => (),
+            Err(e) => todo!("got err: {e:?}"),
+        };
+        Ok(())
     }
 }

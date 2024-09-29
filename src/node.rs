@@ -6,12 +6,12 @@ use crate::{error::Error, message::Message, new_event::Event, Fut};
 
 pub trait Node<I, T, S = (), NId = String> {
     fn init(node_id: NId, node_ids: Vec<NId>, state: S) -> Self;
-    fn on_event<W>(
+    fn on_event(
         &self,
         event: Event<I, T>,
         event_handler: crate::new_event::EventHandler<I, T, usize>,
-        writer: W
-    ) where
+    ) -> tokio::task::JoinHandle<anyhow::Result<NodeResponse<I, T>>>
+    where
         T: std::marker::Sync + Serialize + Debug + Send + 'static + Clone,
         I: std::marker::Send + 'static + Debug,
         Self: std::marker::Send + std::marker::Sync + Clone + 'static,
@@ -19,27 +19,9 @@ pub trait Node<I, T, S = (), NId = String> {
         match event {
             Event::MessageRecived(message) => {
                 let this = self.clone();
-                let x = tokio::spawn(async move {
-                    dbg!("handing msg");
-                    let response = this.handle_message_recived(message, event_handler).await;
-                    panic!("got response {response:?}");
-                    match response {
-                        Ok(NodeResponse::Event(e)) => todo!("got event {e:?}"),
-                        Ok(NodeResponse::Message(message)) => message
-                            .send(std::io::stdout().lock())
-                            .expect("failed to write to stdout"),
-                        Ok(NodeResponse::Reply(message)) => {
-                            let (reply, body) = message.into_reply();
-                            reply
-                                .with_body(body)
-                                .send(std::io::stdout().lock())
-                                .expect("failed to write to stdout");
-                        }
-                        Ok(NodeResponse::Error(e)) => todo!("got node error: {e:?}"),
-                        Ok(NodeResponse::None) => (),
-                        Err(e) => todo!("got err: {e:?}"),
-                    };
-                });
+                tokio::spawn(
+                    async move { this.handle_message_recived(message, event_handler).await },
+                )
             }
             Event::MessageSent(_) => todo!(),
             Event::Error(_) => todo!(),
@@ -70,17 +52,17 @@ mod test {
     use super::*;
     #[derive(Debug, Clone)]
     struct TestNode;
-    #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Deserialize)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Deserialize, serde::Serialize)]
     enum A {
         C,
     }
     impl crate::new_event::IntoBodyId<usize> for A {
         fn into_body_id(self) -> crate::new_event::BodyId<usize> {
-            todo!()
+            crate::new_event::BodyId(1)
         }
 
         fn clone_into_body_id(&self) -> crate::new_event::BodyId<usize> {
-            todo!()
+            crate::new_event::BodyId(1)
         }
     }
 
@@ -108,7 +90,13 @@ mod test {
             message: Message<A>,
             event_handler: crate::new_event::EventHandler<A, B, usize>,
         ) -> Fut<NodeResponse<A, B>> {
-            Box::pin(async move { Ok(NodeResponse::None) })
+            Box::pin(async move {
+                Ok(NodeResponse::Message(Message {
+                    src: "set_test_src".to_string(),
+                    dest: "test_dest".to_string(),
+                    body: B::D,
+                }))
+            })
         }
     }
 
@@ -122,9 +110,9 @@ mod test {
         };
         let event_handler = crate::new_event::EventHandler::new();
         let my_event = Event::MessageRecived(msg.clone());
-        node.on_event(my_event, event_handler.clone());
+        let join_handle = node.on_event(my_event, event_handler.clone());
 
-        let _ = node.handle_message_recived(msg, event_handler).await;
+        let _ = dbg!(node.handle_message_recived(msg, event_handler).await);
     }
 
     #[tokio::test]
@@ -161,9 +149,22 @@ mod test {
             }
         );
 
+        let message = Message {
+            src: "do_something".to_string(),
+            dest: "the_node".to_string(),
+            body: A::C,
+        };
+
         let mut input = std::io::Cursor::new(Vec::new());
+        message.send(&mut input).unwrap();
         let mut output = std::io::Cursor::new(Vec::new());
 
-        handler.run_with_io(input, &mut output);
+        input.set_position(0);
+        // handler.run_with_io(input, &mut output).await;
+        dbg!(tokio::time::timeout(std::time::Duration::from_millis(50),handler.run_with_io(input, &mut output)).await);
+        output.set_position(0);
+        // dbg!(output);
+        let res: std::collections::HashMap<String, serde_json::Value> = serde_json::from_reader(output).unwrap();
+        dbg!(res);
     }
 }
