@@ -1,6 +1,6 @@
 use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{fmt::Debug, hash::Hash};
+use std::fmt::Debug;
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
@@ -97,19 +97,19 @@ where
     {
         let mut lines = tokio::io::BufReader::new(reader).lines();
         loop {
-            dbg!("starting loop");
-            dbg!(&self.tasks);
             tokio::select! {
                 Ok(Some(line)) = lines.next_line() => {
-                    if let Err(_) = self.on_new_line(line) {
+                    if self.on_new_line(line).is_err() {
                         break;
                     }
                 },
                 event = self.event_rx.recv() => {
-                    self.handle_event(event, &mut writer);
+                    self.handle_event(event);
                 }
                 Some(task) = self.tasks.join_next() => {
-                    Self::on_task_complete(task.unwrap(), &mut writer);
+                    if Self::on_task_complete(task.unwrap(), &mut writer).is_err() {
+                        break;
+                    }
                 }
                 else => {
                     panic!("got else?");
@@ -127,16 +127,11 @@ where
                 bail!("failed to parse line {line:?}: {e}");
             }
         };
-        dbg!(&line);
         let event = new_event::Event::MessageRecived(value);
-        dbg!(&event);
         self.event_handler.publish_event(event).unwrap();
         Ok(())
     }
-    fn handle_event<W>(&mut self, event: Option<new_event::Event<I, T>>, writer: W)
-    where
-        W: std::io::Write + Send,
-    {
+    fn handle_event(&mut self, event: Option<new_event::Event<I, T>>) {
         let join_handle = self
             .node
             .on_event(event.unwrap(), self.event_handler.clone());
@@ -146,15 +141,16 @@ where
     fn on_task_complete<W>(
         task: Result<anyhow::Result<NodeResponse<I, T>>, tokio::task::JoinError>,
         writer: W,
-    ) -> anyhow::Result<()> where
+    ) -> anyhow::Result<()>
+    where
         W: std::io::Write,
     {
         let response = task.unwrap();
         match response {
             Ok(NodeResponse::Event(e)) => todo!("got event {e:?}"),
-            Ok(NodeResponse::Message(message)) => message
-                .send(writer)
-                .context("failed to write to stdout")?,
+            Ok(NodeResponse::Message(message)) => {
+                message.send(writer).context("failed to write to stdout")?
+            }
             Ok(NodeResponse::Reply(message)) => {
                 let (reply, body) = message.into_reply();
                 reply
