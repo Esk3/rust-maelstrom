@@ -1,4 +1,5 @@
 use anyhow::Context;
+use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, hash::Hash};
 use tokio::io::AsyncBufReadExt;
 
@@ -13,11 +14,11 @@ pub struct NodeHandler<I, T, N, Id> {
     event_rx: tokio::sync::mpsc::UnboundedReceiver<new_event::Event<I, T>>,
 }
 
-impl<I, T, N, Id> NodeHandler<I, T, N, Id>
+impl<I, T, N, Id> NodeHandler<I, T, N, usize>
 where
-    N: crate::node::Node<I, T>,
-    T: new_event::IntoBodyId<Id> + 'static,
-    I: new_event::IntoBodyId<Id> + 'static,
+    N: crate::node::Node<I, T> + Clone + Sync + Send,
+    T: new_event::IntoBodyId<Id> + 'static + Clone + Serialize,
+    I: new_event::IntoBodyId<Id> + 'static + DeserializeOwned + Clone,
     Id: Hash + Eq + PartialEq + Debug + Clone + Sync + Send + 'static,
 {
     pub async fn init() -> anyhow::Result<Self> {
@@ -61,10 +62,9 @@ where
     {
         let mut lines = tokio::io::BufReader::new(reader).lines();
 
-
         let init_line = lines
-                    .next_line()
-                    .await
+            .next_line()
+            .await
             .context("Failed to read init line")?
             .context("Init line missing")?;
         serde_json::from_str(&init_line)
@@ -83,7 +83,35 @@ where
             .send(writer)
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(self) {
+        self.run_with_io(tokio::io::stdin(), std::io::stdout().lock())
+            .await;
+    }
+
+    pub async fn run_with_io<R, W>(mut self, reader: R, writer: W)
+    where
+        R: tokio::io::AsyncRead + std::marker::Unpin,
+        W: std::io::Write,
+    {
+        let mut lines = tokio::io::BufReader::new(reader).lines();
         self.event_rx.recv().await;
+        tokio::select! {
+            line = lines.next_line() => {
+                self.on_new_line(line);
+            },
+            event = self.event_rx.recv() => {
+                self.handle_event(event, writer);
+            }
+        }
+    }
+
+    fn on_new_line(&self, line: Result<Option<String>, std::io::Error>) {
+        let input_message = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
+        let event = new_event::Event::MessageRecived(input_message);
+        self.event_handler.publish_event(event);
+    }
+    fn handle_event<W>(self, event: Option<new_event::Event<I, T>>, writer: W) {
+        self.node
+            .on_event(event.unwrap(), self.event_handler.clone(), writer);
     }
 }
