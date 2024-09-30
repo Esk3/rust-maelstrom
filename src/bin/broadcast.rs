@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use rust_maelstrom::{
     id_counter::SeqIdCounter,
-    message::{send_messages_with_retry, Message},
-    new_event::{self, EventHandler},
+    message::Message,
+    new_event::{self, EventHandler, IntoBodyId, MessageId},
     node::NodeResponse,
     Fut,
 };
@@ -116,30 +116,49 @@ impl BroadcastNode {
         }
 
         let mut listners = tokio::task::JoinSet::new();
-        let messages = self.create_peer_messages(&value);
+        let messages = self.create_filtered_peer_messages(&value, &message.src);
 
         for message in messages {
-            let mut listner = event_handler.subscribe(&message).unwrap();
+            let mut listner = event_handler
+                .subscribe(&MessageId {
+                    src: message.dest.clone(),
+                    dest: message.src.clone(),
+                    id: message.body.clone_into_body_id(),
+                })
+                .unwrap();
             listners.spawn(async move { listner.recv().await });
             message.send(std::io::stdout()).unwrap();
         }
 
-        dbg!(
-            tokio::time::timeout(std::time::Duration::from_secs(3), async move {
-                while let Some(res) = listners.join_next().await {
-                    dbg!(res);
-                }
-            })
-            .await
-        );
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async move {
+            while (listners.join_next().await).is_some() {}
+        })
+        .await;
 
         Response::BroadcastOk {
             in_reply_to: msg_id,
         }
     }
 
-    fn create_filtered_peer_messages(&self) -> Vec<Message<Request>> {
-        todo!()
+    fn create_filtered_peer_messages(
+        &self,
+        message: &serde_json::Value,
+        src: &str,
+    ) -> Vec<Message<Request>> {
+        self.neighbors
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|nei| nei.as_str() != src)
+            .map(|nei| Message {
+                src: self.node_id.to_string(),
+                dest: nei.clone(),
+                body: Request::Broadcast {
+                    message: message.clone(),
+                    msg_id: self.id_generator.next_id(),
+                },
+            })
+            .collect()
     }
 
     fn create_peer_messages(&self, message: &serde_json::Value) -> Vec<Message<Request>> {
@@ -157,7 +176,6 @@ impl BroadcastNode {
             })
             .collect()
     }
-
 
     fn read(&self, msg_id: usize) -> Response {
         let messages = self.messages.lock().unwrap().clone();
@@ -251,4 +269,3 @@ impl rust_maelstrom::new_event::IntoBodyId<usize> for Response {
         }
     }
 }
-
