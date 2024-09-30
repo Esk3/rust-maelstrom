@@ -56,15 +56,6 @@ impl rust_maelstrom::node::Node<Request, Response> for BroadcastNode {
                     message: value,
                     msg_id,
                 } => {
-                    message
-                        .clone()
-                        .into_reply()
-                        .0
-                        .with_body(Response::BroadcastOk {
-                            in_reply_to: msg_id,
-                        })
-                        .send(std::io::stdout())
-                        .unwrap();
                     let body = self.broadcast(msg_id, value, &message, event_handler).await;
                     Ok(message.with_body(body).into_node_reply())
                 }
@@ -73,7 +64,7 @@ impl rust_maelstrom::node::Node<Request, Response> for BroadcastNode {
                     Ok(message.with_body(body).into_node_reply())
                 }
                 Request::BroadcastOk { in_reply_to: _ } => Ok(NodeResponse::Event(
-                    new_event::Event::MessageRecived(message.with_body(body)),
+                    dbg!(new_event::Event::MessageRecived(message.with_body(body))),
                 )),
             }
         })
@@ -127,13 +118,15 @@ impl BroadcastNode {
                 })
                 .unwrap();
             listners.spawn(async move { listner.recv().await });
-            message.send(std::io::stdout()).unwrap();
+            message.send(std::io::stdout().lock()).unwrap();
         }
 
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async move {
-            while (listners.join_next().await).is_some() {}
-        })
-        .await;
+        let _ = dbg!(tokio::time::timeout(std::time::Duration::from_secs(3), async move {
+                    while (listners.join_next().await).is_some() {
+                        dbg!(&listners);
+            }
+                })
+                .await);
 
         Response::BroadcastOk {
             in_reply_to: msg_id,

@@ -104,20 +104,20 @@ where
         loop {
             tokio::select! {
                 Ok(Some(line)) = lines.next_line() => {
-                    if self.on_new_line(line).is_err() {
+                    if self.on_new_line(dbg!(line)).is_err() {
                         break;
                     }
                 },
                 Some(event) = self.event_rx.recv() => {
-                    self.handle_event(event);
+                    self.handle_event(dbg!(event));
                 }
                 Some(task) = self.tasks.join_next() => {
-                    if self.on_task_complete(task.unwrap(), &mut writer).is_err() {
+                    if self.on_task_complete(dbg!(task).unwrap(), &mut writer).is_err() {
                         break;
                     }
                 }
                 else => {
-                    panic!("got else?");
+                    panic!("got else");
                 }
             }
         }
@@ -133,7 +133,7 @@ where
                 bail!("failed to parse line {line:?}: {e}");
             }
         };
-        let event = new_event::Event::MessageRecived(value);
+        let event = new_event::Event::MessageRecived(dbg!(value));
         self.event_handler.publish_event(event).unwrap();
         Ok(())
     }

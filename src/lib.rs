@@ -10,6 +10,7 @@ pub mod node;
 pub mod node_handler;
 pub mod server;
 pub mod service;
+pub mod event_worker;
 
 pub type Fut<T> = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<T>> + Send>>;
 
