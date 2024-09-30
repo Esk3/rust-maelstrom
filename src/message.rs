@@ -3,7 +3,10 @@ use std::fmt::Debug;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::event::{EventBroker, EventId};
+use crate::{
+    event::{EventBroker, EventId},
+    node::NodeResponse,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Message<T> {
@@ -44,6 +47,10 @@ impl<T> Message<T> {
             dest: self.dest,
             body,
         }
+    }
+
+    pub fn into_node_reply<I>(self) -> NodeResponse<I, T> {
+        NodeResponse::Reply(self)
     }
 }
 

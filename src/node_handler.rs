@@ -5,7 +5,7 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::{
     message::{InitRequest, Message},
-    new_event::{self, EventHandler},
+    new_event::{self, EventHandler, MessageId},
     node::NodeResponse,
 };
 
@@ -32,7 +32,12 @@ where
         W: std::io::Write,
     {
         let node = Self::init_node(reader, writer).await?;
-        let (event_handler, event_rx) = new_event::EventHandler::new_with_fallback();
+        let event_handler = new_event::EventHandler::new();
+        let event_rx = event_handler.subscribe(&MessageId {
+            src: "*".to_string(),
+            dest: "*".to_string(),
+            id: 0.into(),
+        })?;
         Ok(Self {
             node,
             event_handler,
@@ -92,8 +97,8 @@ where
 
     pub async fn run_with_io<R, W>(mut self, reader: R, mut writer: W)
     where
-        R: tokio::io::AsyncRead + std::marker::Unpin,
-        W: std::io::Write + Send,
+        R: tokio::io::AsyncRead + std::marker::Unpin + Debug,
+        W: std::io::Write + Send + Debug,
     {
         let mut lines = tokio::io::BufReader::new(reader).lines();
         loop {
@@ -103,11 +108,11 @@ where
                         break;
                     }
                 },
-                event = self.event_rx.recv() => {
+                Some(event) = self.event_rx.recv() => {
                     self.handle_event(event);
                 }
                 Some(task) = self.tasks.join_next() => {
-                    if Self::on_task_complete(task.unwrap(), &mut writer).is_err() {
+                    if self.on_task_complete(task.unwrap(), &mut writer).is_err() {
                         break;
                     }
                 }
@@ -116,6 +121,7 @@ where
                 }
             }
         }
+        dbg!("down here");
         while self.tasks.join_next().await.is_some() {}
     }
 
@@ -131,14 +137,14 @@ where
         self.event_handler.publish_event(event).unwrap();
         Ok(())
     }
-    fn handle_event(&mut self, event: Option<new_event::Event<I, T>>) {
-        let join_handle = self
-            .node
-            .on_event(event.unwrap(), self.event_handler.clone());
+
+    fn handle_event(&mut self, event: new_event::Event<I, T>) {
+        let join_handle = self.node.on_event(event, self.event_handler.clone());
         self.tasks.spawn(join_handle);
     }
 
     fn on_task_complete<W>(
+        &self,
         task: Result<anyhow::Result<NodeResponse<I, T>>, tokio::task::JoinError>,
         writer: W,
     ) -> anyhow::Result<()>
@@ -147,9 +153,13 @@ where
     {
         let response = task.unwrap();
         match response {
-            Ok(NodeResponse::Event(e)) => todo!("got event {e:?}"),
+            Ok(NodeResponse::Event(e)) => {
+                self.event_handler
+                    .publish_event(e)
+                    .context("event worker closed")?;
+            }
             Ok(NodeResponse::Message(message)) => {
-                message.send(writer).context("failed to write to stdout")?
+                message.send(writer).context("failed to write to stdout")?;
             }
             Ok(NodeResponse::Reply(message)) => {
                 let (reply, body) = message.into_reply();

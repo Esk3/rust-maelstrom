@@ -28,7 +28,7 @@ pub trait Node<I, T, S = (), NId = String> {
         }
     }
     fn handle_message_recived(
-        &self,
+        self,
         message: Message<I>,
         event_handler: crate::new_event::EventHandler<I, T, usize>,
     ) -> Fut<NodeResponse<I, T>>;
@@ -44,7 +44,7 @@ pub enum NodeResponse<I, T> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod tests {
     use std::io::Write;
 
     use crate::message::{InitRequest, InitResponse};
@@ -86,7 +86,7 @@ mod test {
         }
 
         fn handle_message_recived(
-            &self,
+            mut self,
             message: Message<A>,
             event_handler: crate::new_event::EventHandler<A, B, usize>,
         ) -> Fut<NodeResponse<A, B>> {
@@ -115,9 +115,9 @@ mod test {
         let _ = dbg!(node.handle_message_recived(msg, event_handler).await);
     }
 
-    #[tokio::test]
-    async fn node_handler_test() {
-        let init_line = Message {
+    #[must_use]
+    pub fn create_init_line() -> Message<InitRequest> {
+        Message {
             src: "init_node".to_string(),
             dest: "test_node_from_init".to_string(),
             body: InitRequest::Init {
@@ -125,7 +125,12 @@ mod test {
                 node_id: "init_msg_node_id".to_string(),
                 node_ids: Vec::new(),
             },
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn node_handler_test() {
+        let init_line = create_init_line();
         let mut input = std::io::Cursor::new(Vec::new());
         init_line.send(&mut input).unwrap();
         input.write_all(b"\n").unwrap();
@@ -161,10 +166,17 @@ mod test {
 
         input.set_position(0);
         // handler.run_with_io(input, &mut output).await;
-        dbg!(tokio::time::timeout(std::time::Duration::from_millis(50),handler.run_with_io(input, &mut output)).await);
+        dbg!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                handler.run_with_io(input, &mut output)
+            )
+            .await
+        );
         output.set_position(0);
         // dbg!(output);
-        let res: std::collections::HashMap<String, serde_json::Value> = serde_json::from_reader(output).unwrap();
+        let res: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_reader(output).unwrap();
         dbg!(res);
     }
 }
