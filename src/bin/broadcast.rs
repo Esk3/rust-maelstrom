@@ -1,118 +1,174 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
+
 use rust_maelstrom::{
-    event::{self, Event},
     id_counter::SeqIdCounter,
     message::{send_messages_with_retry, Message},
-    server,
-    service::Service,
-    Fut, Node,
+    new_event::{self, EventHandler},
+    node::NodeResponse,
+    Fut,
 };
-use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let s = server::Server::new(Handler);
-    s.run().await?;
+    rust_maelstrom::node_handler::NodeHandler::<Request, Response, BroadcastNode, _>::init()
+        .await?
+        .run()
+        .await;
     Ok(())
 }
 
-#[derive(Clone)]
-struct Handler;
-impl Service<server::HandlerInput<Request, BroadcastNode>> for Handler {
-    type Response = server::HandlerResponse<Message<Response>, Request>;
-
-    type Future = Fut<Self::Response>;
-
-    fn call(
-        &mut self,
-        server::HandlerInput {
-            event,
-            node,
-            event_broker,
-        }: server::HandlerInput<Request, BroadcastNode>,
-    ) -> Self::Future {
-        let Event::Maelstrom(message) = event else {
-            panic!();
-        };
-        let src = message.src.clone();
-        let (reply, body) = message.into_reply();
-        match body {
-            Request::Topology { topology, msg_id } => Box::pin(async move {
-                handle_topology(&node, topology, msg_id)
-                    .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
-            }),
-            Request::Broadcast { message, msg_id } => Box::pin(async move {
-                broadcast(node, message, &src, msg_id, event_broker)
-                    .await
-                    .map(|body| server::HandlerResponse::Response(reply.with_body(body)))
-            }),
-            Request::Read { msg_id } => Box::pin(async move {
-                let body = read(&node, msg_id);
-                Ok(server::HandlerResponse::Response(reply.with_body(body)))
-            }),
-            Request::BroadcastOk { in_reply_to: _ } => Box::pin(async move {
-                Ok(server::HandlerResponse::Event(event::Event::Injected (
-                    reply.into_reply().0.with_body(body),
-                )))
-            }),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BroadcastNode {
-    node_id: String,
-    neighbors: Vec<String>,
-    messages: Vec<serde_json::Value>,
+    node_id: Arc<String>,
+    neighbors: Arc<RwLock<Vec<String>>>,
+    messages: Arc<Mutex<Vec<serde_json::Value>>>,
     id_generator: SeqIdCounter,
 }
-impl Node for BroadcastNode {
-    fn init(node_id: String, _node_ids: Vec<String>) -> Self {
+
+impl rust_maelstrom::node::Node<Request, Response> for BroadcastNode {
+    fn init(node_id: String, _node_ids: Vec<String>, _state: ()) -> Self {
         Self {
-            node_id,
-            neighbors: Vec::new(),
-            messages: Vec::new(),
+            node_id: Arc::new(node_id),
+            neighbors: Arc::default(),
+            messages: Arc::default(),
             id_generator: SeqIdCounter::new(),
         }
+    }
+
+    fn handle_message_recived(
+        self,
+        message: Message<Request>,
+        event_handler: rust_maelstrom::new_event::EventHandler<Request, Response, usize>,
+    ) -> Fut<rust_maelstrom::node::NodeResponse<Request, Response>> {
+        let (message, body) = message.split();
+        Box::pin(async move {
+            match body {
+                Request::Topology { topology, msg_id } => self
+                    .topology(topology, msg_id)
+                    .map(|body| message.with_body(body).into_node_reply()),
+                Request::Broadcast {
+                    message: value,
+                    msg_id,
+                } => {
+                    message
+                        .clone()
+                        .into_reply()
+                        .0
+                        .with_body(Response::BroadcastOk {
+                            in_reply_to: msg_id,
+                        })
+                        .send(std::io::stdout())
+                        .unwrap();
+                    let body = self.broadcast(msg_id, value, &message, event_handler).await;
+                    Ok(message.with_body(body).into_node_reply())
+                }
+                Request::Read { msg_id } => {
+                    let body = self.read(msg_id);
+                    Ok(message.with_body(body).into_node_reply())
+                }
+                Request::BroadcastOk { in_reply_to: _ } => Ok(NodeResponse::Event(
+                    new_event::Event::MessageRecived(message.with_body(body)),
+                )),
+            }
+        })
     }
 }
 
 impl BroadcastNode {
-    pub fn broadcast(
-        &mut self,
-        message: &serde_json::Value,
-        src: &str,
-    ) -> Option<Vec<Message<Request>>> {
-        if self.messages.contains(message) {
-            return None;
+    fn topology(
+        &self,
+        mut topology: HashMap<String, Vec<String>>,
+        msg_id: usize,
+    ) -> anyhow::Result<Response> {
+        {
+            let neighbors = topology
+                .remove(&*self.node_id)
+                .context("node id not in topology")?;
+            *self.neighbors.write().unwrap() = neighbors;
         }
-        self.messages.push(message.clone());
+        Ok(Response::TopologyOk {
+            in_reply_to: msg_id,
+        })
+    }
 
-        let messages = self
-            .neighbors
-            .clone()
-            .into_iter()
-            .filter(|neighbor| neighbor != src)
-            .enumerate()
-            .map(|(_i, neighbor)| Message {
-                src: self.node_id.clone(),
-                dest: neighbor,
+    async fn broadcast<T>(
+        &self,
+        msg_id: usize,
+        value: serde_json::Value,
+        message: &Message<T>,
+        event_handler: EventHandler<Request, Response, usize>,
+    ) -> Response {
+        {
+            let mut messages = self.messages.lock().unwrap();
+            if messages.contains(&value) {
+                return Response::BroadcastOk {
+                    in_reply_to: msg_id,
+                };
+            }
+
+            messages.push(value.clone());
+        }
+
+        let mut listners = tokio::task::JoinSet::new();
+        let messages = self.create_peer_messages(&value);
+
+        for message in messages {
+            let mut listner = event_handler.subscribe(&message).unwrap();
+            listners.spawn(async move { listner.recv().await });
+            message.send(std::io::stdout()).unwrap();
+        }
+
+        dbg!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), async move {
+                while let Some(res) = listners.join_next().await {
+                    dbg!(res);
+                }
+            })
+            .await
+        );
+
+        Response::BroadcastOk {
+            in_reply_to: msg_id,
+        }
+    }
+
+    fn create_filtered_peer_messages(&self) -> Vec<Message<Request>> {
+        todo!()
+    }
+
+    fn create_peer_messages(&self, message: &serde_json::Value) -> Vec<Message<Request>> {
+        self.neighbors
+            .read()
+            .unwrap()
+            .iter()
+            .map(|nei| Message {
+                src: self.node_id.to_string(),
+                dest: nei.clone(),
                 body: Request::Broadcast {
                     message: message.clone(),
                     msg_id: self.id_generator.next_id(),
                 },
             })
-            .collect();
-        Some(messages)
+            .collect()
+    }
+
+
+    fn read(&self, msg_id: usize) -> Response {
+        let messages = self.messages.lock().unwrap().clone();
+        Response::ReadOk {
+            messages,
+            in_reply_to: msg_id,
+        }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     Topology {
@@ -131,18 +187,33 @@ pub enum Request {
     },
 }
 
-impl event::EventId for Request {
-    fn get_event_id(&self) -> usize {
+impl rust_maelstrom::new_event::IntoBodyId<usize> for Request {
+    fn into_body_id(self) -> rust_maelstrom::new_event::BodyId<usize> {
         match self {
-            Request::Topology { msg_id, .. }
-            | Request::Broadcast { msg_id, .. }
-            | Request::Read { msg_id } => *msg_id,
-            Request::BroadcastOk { in_reply_to } => *in_reply_to,
+            Request::Topology {
+                topology: _,
+                msg_id,
+            }
+            | Request::Broadcast { message: _, msg_id }
+            | Request::Read { msg_id } => msg_id.into(),
+            Request::BroadcastOk { in_reply_to } => in_reply_to.into(),
+        }
+    }
+
+    fn clone_into_body_id(&self) -> rust_maelstrom::new_event::BodyId<usize> {
+        match self {
+            Request::Topology {
+                topology: _,
+                msg_id,
+            }
+            | Request::Broadcast { message: _, msg_id }
+            | Request::Read { msg_id } => msg_id.into(),
+            Request::BroadcastOk { in_reply_to } => in_reply_to.into(),
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     TopologyOk {
@@ -157,56 +228,27 @@ pub enum Response {
     },
 }
 
-fn handle_topology(
-    node: &Arc<Mutex<BroadcastNode>>,
-    mut topology: HashMap<String, Vec<String>>,
-    msg_id: usize,
-) -> anyhow::Result<Response> {
-    {
-        let mut node = node.lock().unwrap();
-        let neighbors = topology
-            .remove(&node.node_id)
-            .context("node id not in topology")?;
-        node.neighbors = neighbors;
+impl rust_maelstrom::new_event::IntoBodyId<usize> for Response {
+    fn into_body_id(self) -> rust_maelstrom::new_event::BodyId<usize> {
+        match self {
+            Response::TopologyOk { in_reply_to }
+            | Response::BroadcastOk { in_reply_to }
+            | Response::ReadOk {
+                messages: _,
+                in_reply_to,
+            } => in_reply_to.into(),
+        }
     }
-    Ok(Response::TopologyOk {
-        in_reply_to: msg_id,
-    })
-}
-async fn broadcast(
-    node: Arc<Mutex<BroadcastNode>>,
-    message: serde_json::Value,
-    src: &str,
-    msg_id: usize,
-    event_broker: event::EventBroker<Request>,
-) -> anyhow::Result<Response> {
-    let messages = {
-        let mut node = node.lock().unwrap();
-        let Some(messages) = node.broadcast(&message, src) else {
-            return Ok(Response::BroadcastOk {
-                in_reply_to: msg_id,
-            });
-        };
-        messages
-    };
 
-    send_messages_with_retry(
-        messages,
-        std::time::Duration::from_millis(100),
-        event_broker,
-    )
-    .await?;
-    Ok(Response::BroadcastOk {
-        in_reply_to: msg_id,
-    })
-}
-fn read(node: &Arc<Mutex<BroadcastNode>>, msg_id: usize) -> Response {
-    let messages = {
-        let node = node.lock().unwrap();
-        node.messages.clone()
-    };
-    Response::ReadOk {
-        messages,
-        in_reply_to: msg_id,
+    fn clone_into_body_id(&self) -> rust_maelstrom::new_event::BodyId<usize> {
+        match self {
+            Response::TopologyOk { in_reply_to }
+            | Response::BroadcastOk { in_reply_to }
+            | Response::ReadOk {
+                messages: _,
+                in_reply_to,
+            } => in_reply_to.into(),
+        }
     }
 }
+
