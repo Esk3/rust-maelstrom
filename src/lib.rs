@@ -11,6 +11,7 @@ pub mod node_handler;
 pub mod server;
 pub mod service;
 pub mod event_worker;
+pub mod event_queue;
 
 pub type Fut<T> = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<T>> + Send>>;
 
