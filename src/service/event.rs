@@ -22,28 +22,50 @@ impl<S, Req> EventLayer<S, Req> {
         }
     }
 }
-impl<S, Req> Service<Message<Req>> for EventLayer<S, Req>
+
+impl<S, Req, Res> Service<Message<Req>> for EventLayer<S, Req>
 where
-    S: Service<Message<Req>> + Clone + Send + 'static,
+    S: Service<Message<Req>, Response = Option<Res>> + Clone + Send + 'static,
     Req: Send + Clone + AsBodyId + 'static + Debug,
 {
-    type Response = Option<S::Response>;
+    type Response = Option<Res>;
 
     type Future = Fut<Self::Response>;
 
     fn call(&mut self, request: Message<Req>) -> Self::Future {
         let mut this = self.clone();
         Box::pin(async move {
-            match this.event_broker.publish_message_recived(request) {
+            let id = MessageId {
+                this: request.dest.to_string(),
+                other: request.src.to_string(),
+                id: request.body.as_body_id(),
+            };
+            match this.event_broker.publish_message_id(&id, request) {
                 Ok(()) => Ok(None),
-                Err(request) => this.inner.call(request).await.map(Some),
+                Err(request) => this.inner.call(request).await,
             }
         })
     }
 }
 
+#[derive(Debug, Default)]
+pub struct EventStore<Key, T> {
+    subscribers: HashMap<Key, tokio::sync::oneshot::Sender<T>>,
+    events: HashMap<Key, T>,
+}
+
+impl<Key, T> EventStore<Key, T> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            subscribers: HashMap::new(),
+            events: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct EventBroker<T>(Arc<Mutex<HashMap<MessageId, tokio::sync::oneshot::Sender<Message<T>>>>>);
+pub struct EventBroker<T>(Arc<Mutex<EventStore<MessageId, Message<T>>>>);
 
 impl<T> EventBroker<T>
 where
@@ -51,49 +73,38 @@ where
 {
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
+        Self(Arc::new(Mutex::new(EventStore::new())))
     }
 
-    pub fn publish_message_recived(&self, message: Message<T>) -> Result<(), Message<T>> {
-        let id = MessageId {
-            this: message.dest.to_string(),
-            other: message.src.to_string(),
-            id: message.body.as_body_id(),
-        };
-        match self.0.lock().unwrap().remove(&id) {
-            Some(tx) => {
-                tx.send(message)?;
-                Ok(())
-            }
-            None => Err(message),
-        }
-    }
-    pub fn publish_message_from_self(&self, message: Message<T>) -> Result<(), Message<T>> {
-        let id = MessageId {
-            this: message.src.to_string(),
-            other: message.dest.to_string(),
-            id: message.body.as_body_id(),
-        };
-        match self.0.lock().unwrap().remove(&id) {
-            Some(tx) => {
-                tx.send(message)?;
-                Ok(())
-            }
-            None => Err(message),
-        }
-    }
-
-    pub fn subscribe_to_response(
+    pub fn publish_message_id(
         &self,
-        message: &Message<T>,
-    ) -> tokio::sync::oneshot::Receiver<Message<T>> {
-        let id = MessageId {
-            this: message.src.to_string(),
-            other: message.dest.to_string(),
-            id: message.body.as_body_id(),
-        };
+        id: &MessageId,
+        message: Message<T>,
+    ) -> Result<(), Message<T>> {
+        match self.0.lock().unwrap().subscribers.remove(id) {
+            Some(tx) => {
+                tx.send(message)?;
+                Ok(())
+            }
+            None => Err(message),
+        }
+    }
+
+    pub fn publish_or_store_id(&self, id: &MessageId, message: Message<T>) {
+        if let Err(message) = self.publish_message_id(id, message) {
+            self.0.lock().unwrap().events.insert(id.clone(), message);
+        }
+    }
+
+    #[must_use]
+    pub fn subsribe_to_id(&self, id: MessageId) -> tokio::sync::oneshot::Receiver<Message<T>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.0.lock().unwrap().insert(id, tx);
+        let mut lock = self.0.lock().unwrap();
+        if let Some(message) = lock.events.remove(&id) {
+            tx.send(message).unwrap();
+        } else {
+            lock.subscribers.insert(id, tx);
+        }
         rx
     }
 }
@@ -109,9 +120,9 @@ where
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct MessageId {
-    this: String,
-    other: String,
-    id: BodyId,
+    pub this: String,
+    pub other: String,
+    pub id: BodyId,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

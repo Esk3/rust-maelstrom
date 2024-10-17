@@ -11,7 +11,7 @@ use rust_maelstrom::{
     message::Message,
     node_handler::NodeHandler,
     service::{
-        event::{AsBodyId, EventBroker, EventLayer},
+        event::{AsBodyId, EventBroker, EventLayer, MessageId},
         json::JsonLayer,
         Service,
     },
@@ -50,7 +50,7 @@ impl Node<EventBroker<Request>> for BroadcastNode {
 }
 
 impl Service<Message<Request>> for BroadcastNode {
-    type Response = Message<Response>;
+    type Response = Option<Message<Response>>;
 
     type Future = Fut<Self::Response>;
 
@@ -64,7 +64,7 @@ impl BroadcastNode {
     async fn handle_request(
         &mut self,
         message: Message<Request>,
-    ) -> anyhow::Result<Message<Response>> {
+    ) -> anyhow::Result<Option<Message<Response>>> {
         let (message, body) = message.split();
         let response = match body {
             Request::Topology { topology, msg_id } => self.topology(topology, msg_id),
@@ -74,16 +74,19 @@ impl BroadcastNode {
             } => Ok(self.broadcast(msg_id, value, &message).await),
             Request::Read { msg_id } => Ok(self.read(msg_id)),
             Request::BroadcastOk { in_reply_to } => {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                self.event_broker
-                    .publish_message_recived(
-                        message.with_body(Request::BroadcastOk { in_reply_to }),
-                    )
-                    .unwrap();
-                bail!("todo");
+                let message = message.with_body(Request::BroadcastOk { in_reply_to });
+                let id = MessageId {
+                    this: message.dest.to_string(),
+                    other: message.src.to_string(),
+                    id: message.body.as_body_id(),
+                };
+                self.event_broker.publish_or_store_id(&id, message);
+                return Ok(None);
             }
         };
-        response.map(|body| message.into_reply().0.with_body(body))
+        response
+            .map(|body| message.into_reply().0.with_body(body))
+            .map(Some)
     }
 
     fn topology(
@@ -122,16 +125,34 @@ impl BroadcastNode {
         let messages = self.create_filtered_peer_messages(&value, &message.src);
 
         for message in messages {
-            let listner = self.event_broker.subscribe_to_response(&message);
-            listners.spawn(listner);
-            message.send(std::io::stdout().lock()).unwrap();
+            let id = MessageId {
+                this: message.src.to_string(),
+                other: message.dest.to_string(),
+                id: message.body.as_body_id(),
+            };
+            let mut listner = self.event_broker.subsribe_to_id(id);
+            listners.spawn(async move {
+                let mut sleep_time = 100;
+                let sleep_increase = 100;
+                loop {
+                    message.send(std::io::stdout().lock()).unwrap();
+                    tokio::select! {
+                        _ = &mut listner => {
+                            break;
+                        },
+                        () = tokio::time::sleep(std::time::Duration::from_millis(sleep_time)) => {
+                            sleep_time += sleep_increase;
+                            if sleep_time > 2000 {
+                                dbg!("no response");
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
         }
 
-        tokio::time::timeout(std::time::Duration::from_secs(3), async move {
-            while listners.join_next().await.is_some() {}
-        })
-        .await
-        .unwrap();
+        while listners.join_next().await.is_some() {}
 
         Response::BroadcastOk {
             in_reply_to: msg_id,
