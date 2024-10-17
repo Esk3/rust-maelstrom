@@ -83,7 +83,7 @@ impl<S> NodeHandler<S> {
                 let response = this.call(line).await.unwrap();
                 if let Some(res) = response {
                     let mut lock = output.lock().unwrap();
-                    let s = dbg!(serde_json::to_string(dbg!(&res)).unwrap());
+                    let s = serde_json::to_string(&res).unwrap();
                     lock.write_all(s.as_bytes()).unwrap();
                     lock.write_all(b"\n").unwrap();
                     lock.flush().unwrap();

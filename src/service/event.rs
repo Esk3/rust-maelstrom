@@ -90,9 +90,9 @@ where
         }
     }
 
-    pub fn publish_or_store_id(&self, id: &MessageId, message: Message<T>) {
-        if let Err(message) = self.publish_message_id(id, message) {
-            self.0.lock().unwrap().events.insert(id.clone(), message);
+    pub fn publish_or_store_id(&self, id: MessageId, message: Message<T>) {
+        if let Err(message) = self.publish_message_id(&id, message) {
+            self.0.lock().unwrap().events.insert(id, message);
         }
     }
 
@@ -126,7 +126,7 @@ pub struct MessageId {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct BodyId(String);
+pub struct BodyId(pub String);
 
 pub trait AsBodyId {
     fn as_raw_id(&self) -> String;

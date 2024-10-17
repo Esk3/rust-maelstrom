@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use rust_maelstrom::{
@@ -80,7 +80,7 @@ impl BroadcastNode {
                     other: message.src.to_string(),
                     id: message.body.as_body_id(),
                 };
-                self.event_broker.publish_or_store_id(&id, message);
+                self.event_broker.publish_or_store_id(id, message);
                 return Ok(None);
             }
         };
@@ -132,22 +132,22 @@ impl BroadcastNode {
             };
             let mut listner = self.event_broker.subsribe_to_id(id);
             listners.spawn(async move {
-                let mut sleep_time = 100;
-                let sleep_increase = 100;
+                let mut i = 1;
+                let wait_time = |x: u64| x.pow(2) * 100;
                 loop {
+                    if i >= 50 {
+                        dbg!("break");
+                        break;
+                    }
                     message.send(std::io::stdout().lock()).unwrap();
                     tokio::select! {
                         _ = &mut listner => {
                             break;
                         },
-                        () = tokio::time::sleep(std::time::Duration::from_millis(sleep_time)) => {
-                            sleep_time += sleep_increase;
-                            if sleep_time > 2000 {
-                                dbg!("no response");
-                                break;
-                            }
+                        () = tokio::time::sleep(std::time::Duration::from_millis(wait_time(i))) => {
                         }
                     }
+                    i += 1;
                 }
             });
         }
@@ -180,6 +180,7 @@ impl BroadcastNode {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn create_peer_messages(&self, message: &serde_json::Value) -> Vec<Message<Request>> {
         self.neighbors
             .read()
