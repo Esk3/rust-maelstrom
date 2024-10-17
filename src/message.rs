@@ -3,11 +3,6 @@ use std::fmt::Debug;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    event::{EventBroker, EventId},
-    node::NodeResponse,
-};
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Message<T> {
     pub src: String,
@@ -49,9 +44,9 @@ impl<T> Message<T> {
         }
     }
 
-    pub fn into_node_reply<I>(self) -> NodeResponse<I, T> {
-        NodeResponse::Reply(self)
-    }
+    //pub fn into_node_reply<I>(self) -> NodeResponse<I, T> {
+    //    NodeResponse::Reply(self)
+    //}
 }
 
 impl<T> Message<T>
@@ -62,8 +57,9 @@ where
     where
         W: std::io::Write,
     {
-        serde_json::to_writer(&mut writer, self).context("Error writing to stdout")?;
-        writer.write_all(b"\n").context("Error writing to stdout")
+        serde_json::to_writer(&mut writer, self).context("Error writing")?;
+        writer.write_all(b"\n").context("Error writing")?;
+        writer.flush().context("Error flushing writer")
     }
 }
 
@@ -126,39 +122,39 @@ impl<T> PeerMessage<T> {
     }
 }
 
-pub async fn send_messages_with_retry<T>(
-    mut messages: Vec<Message<T>>,
-    interval: std::time::Duration,
-    event_broker: EventBroker<T>,
-) -> anyhow::Result<()>
-where
-    T: EventId + Clone + Send + 'static + Debug + Serialize,
-{
-    let mut interval = tokio::time::interval(interval);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut set = tokio::task::JoinSet::new();
-    messages
-        .iter()
-        .map(|message| event_broker.subscribe(message.body.get_event_id()))
-        .for_each(|c| {
-            set.spawn(c);
-        });
-    while !messages.is_empty() {
-        tokio::select! {
-            _ = interval.tick() => {
-                let mut out = std::io::stdout().lock();
-                for message in &messages {
-                    message.send(&mut out)?;
-                }
-            },
-            Some(response) = set.join_next() => {
-                let response = response.context("thread panicked").unwrap().context("future returned error").unwrap();
-                messages.retain(|message| message.body.get_event_id() != response.id());
-            }
-        }
-    }
-    Ok(())
-}
+//pub async fn send_messages_with_retry<T>(
+//    mut messages: Vec<Message<T>>,
+//    interval: std::time::Duration,
+//    event_broker: EventBroker<T>,
+//) -> anyhow::Result<()>
+//where
+//    T:  Clone + Send + 'static + Debug + Serialize,
+//{
+//    let mut interval = tokio::time::interval(interval);
+//    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+//    let mut set = tokio::task::JoinSet::new();
+//    messages
+//        .iter()
+//        .map(|message| event_broker.subscribe(message.body.get_event_id()))
+//        .for_each(|c| {
+//            set.spawn(c);
+//        });
+//    while !messages.is_empty() {
+//        tokio::select! {
+//            _ = interval.tick() => {
+//                let mut out = std::io::stdout().lock();
+//                for message in &messages {
+//                    message.send(&mut out)?;
+//                }
+//            },
+//            Some(response) = set.join_next() => {
+//                let response = response.context("thread panicked").unwrap().context("future returned error").unwrap();
+//                messages.retain(|message| message.body.get_event_id() != response.id());
+//            }
+//        }
+//    }
+//    Ok(())
+//}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

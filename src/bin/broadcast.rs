@@ -3,23 +3,28 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 use rust_maelstrom::{
     id_counter::SeqIdCounter,
     message::Message,
-    new_event::{self, EventHandler, IntoBodyId, MessageId},
-    node::NodeResponse,
-    Fut,
+    node_handler::NodeHandler,
+    service::{
+        event::{AsBodyId, EventBroker, EventLayer},
+        json::JsonLayer,
+        Service,
+    },
+    Fut, Node,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    rust_maelstrom::node_handler::NodeHandler::<Request, Response, BroadcastNode, _>::init()
-        .await?
-        .run()
-        .await;
+    let event_broker = EventBroker::<Request>::new();
+    let node = NodeHandler::<()>::init_node::<BroadcastNode, _>(event_broker.clone()).await;
+    let service = JsonLayer::new(EventLayer::new(node, event_broker));
+    let handler = NodeHandler::new(service);
+    handler.run().await;
     Ok(())
 }
 
@@ -29,49 +34,58 @@ pub struct BroadcastNode {
     neighbors: Arc<RwLock<Vec<String>>>,
     messages: Arc<Mutex<Vec<serde_json::Value>>>,
     id_generator: SeqIdCounter,
+    event_broker: EventBroker<Request>,
 }
 
-impl rust_maelstrom::node::Node<Request, Response> for BroadcastNode {
-    fn init(node_id: String, _node_ids: Vec<String>, _state: ()) -> Self {
+impl Node<EventBroker<Request>> for BroadcastNode {
+    fn init(node_id: String, _node_ids: Vec<String>, state: EventBroker<Request>) -> Self {
         Self {
             node_id: Arc::new(node_id),
             neighbors: Arc::default(),
             messages: Arc::default(),
             id_generator: SeqIdCounter::new(),
+            event_broker: state,
         }
     }
+}
 
-    fn handle_message_recived(
-        self,
-        message: Message<Request>,
-        event_handler: rust_maelstrom::new_event::EventHandler<Request, Response, usize>,
-    ) -> Fut<rust_maelstrom::node::NodeResponse<Request, Response>> {
-        let (message, body) = message.split();
-        Box::pin(async move {
-            match body {
-                Request::Topology { topology, msg_id } => self
-                    .topology(topology, msg_id)
-                    .map(|body| message.with_body(body).into_node_reply()),
-                Request::Broadcast {
-                    message: value,
-                    msg_id,
-                } => {
-                    let body = self.broadcast(msg_id, value, &message, event_handler).await;
-                    Ok(message.with_body(body).into_node_reply())
-                }
-                Request::Read { msg_id } => {
-                    let body = self.read(msg_id);
-                    Ok(message.with_body(body).into_node_reply())
-                }
-                Request::BroadcastOk { in_reply_to: _ } => Ok(NodeResponse::Event(
-                    dbg!(new_event::Event::MessageRecived(message.with_body(body))),
-                )),
-            }
-        })
+impl Service<Message<Request>> for BroadcastNode {
+    type Response = Message<Response>;
+
+    type Future = Fut<Self::Response>;
+
+    fn call(&mut self, request: Message<Request>) -> Self::Future {
+        let mut this = self.clone();
+        Box::pin(async move { this.handle_request(request).await })
     }
 }
 
 impl BroadcastNode {
+    async fn handle_request(
+        &mut self,
+        message: Message<Request>,
+    ) -> anyhow::Result<Message<Response>> {
+        let (message, body) = message.split();
+        let response = match body {
+            Request::Topology { topology, msg_id } => self.topology(topology, msg_id),
+            Request::Broadcast {
+                message: value,
+                msg_id,
+            } => Ok(self.broadcast(msg_id, value, &message).await),
+            Request::Read { msg_id } => Ok(self.read(msg_id)),
+            Request::BroadcastOk { in_reply_to } => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                self.event_broker
+                    .publish_message_recived(
+                        message.with_body(Request::BroadcastOk { in_reply_to }),
+                    )
+                    .unwrap();
+                bail!("todo");
+            }
+        };
+        response.map(|body| message.into_reply().0.with_body(body))
+    }
+
     fn topology(
         &self,
         mut topology: HashMap<String, Vec<String>>,
@@ -93,7 +107,6 @@ impl BroadcastNode {
         msg_id: usize,
         value: serde_json::Value,
         message: &Message<T>,
-        event_handler: EventHandler<Request, Response, usize>,
     ) -> Response {
         {
             let mut messages = self.messages.lock().unwrap();
@@ -102,7 +115,6 @@ impl BroadcastNode {
                     in_reply_to: msg_id,
                 };
             }
-
             messages.push(value.clone());
         }
 
@@ -110,23 +122,16 @@ impl BroadcastNode {
         let messages = self.create_filtered_peer_messages(&value, &message.src);
 
         for message in messages {
-            let mut listner = event_handler
-                .subscribe(&MessageId {
-                    src: message.dest.clone(),
-                    dest: message.src.clone(),
-                    id: message.body.clone_into_body_id(),
-                })
-                .unwrap();
-            listners.spawn(async move { listner.recv().await });
+            let listner = self.event_broker.subscribe_to_response(&message);
+            listners.spawn(listner);
             message.send(std::io::stdout().lock()).unwrap();
         }
 
-        let _ = dbg!(tokio::time::timeout(std::time::Duration::from_secs(3), async move {
-                    while (listners.join_next().await).is_some() {
-                        dbg!(&listners);
-            }
-                })
-                .await);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async move {
+            while listners.join_next().await.is_some() {}
+        })
+        .await
+        .unwrap();
 
         Response::BroadcastOk {
             in_reply_to: msg_id,
@@ -198,28 +203,19 @@ pub enum Request {
     },
 }
 
-impl rust_maelstrom::new_event::IntoBodyId<usize> for Request {
-    fn into_body_id(self) -> rust_maelstrom::new_event::BodyId<usize> {
+impl AsBodyId for Request {
+    fn as_raw_id(&self) -> String {
         match self {
             Request::Topology {
                 topology: _,
-                msg_id,
+                msg_id: id,
             }
-            | Request::Broadcast { message: _, msg_id }
-            | Request::Read { msg_id } => msg_id.into(),
-            Request::BroadcastOk { in_reply_to } => in_reply_to.into(),
-        }
-    }
-
-    fn clone_into_body_id(&self) -> rust_maelstrom::new_event::BodyId<usize> {
-        match self {
-            Request::Topology {
-                topology: _,
-                msg_id,
+            | Request::Broadcast {
+                message: _,
+                msg_id: id,
             }
-            | Request::Broadcast { message: _, msg_id }
-            | Request::Read { msg_id } => msg_id.into(),
-            Request::BroadcastOk { in_reply_to } => in_reply_to.into(),
+            | Request::Read { msg_id: id }
+            | Request::BroadcastOk { in_reply_to: id } => id.to_string(),
         }
     }
 }
@@ -237,28 +233,4 @@ pub enum Response {
         messages: Vec<serde_json::Value>,
         in_reply_to: usize,
     },
-}
-
-impl rust_maelstrom::new_event::IntoBodyId<usize> for Response {
-    fn into_body_id(self) -> rust_maelstrom::new_event::BodyId<usize> {
-        match self {
-            Response::TopologyOk { in_reply_to }
-            | Response::BroadcastOk { in_reply_to }
-            | Response::ReadOk {
-                messages: _,
-                in_reply_to,
-            } => in_reply_to.into(),
-        }
-    }
-
-    fn clone_into_body_id(&self) -> rust_maelstrom::new_event::BodyId<usize> {
-        match self {
-            Response::TopologyOk { in_reply_to }
-            | Response::BroadcastOk { in_reply_to }
-            | Response::ReadOk {
-                messages: _,
-                in_reply_to,
-            } => in_reply_to.into(),
-        }
-    }
 }

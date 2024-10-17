@@ -135,7 +135,7 @@ where
             node_ids,
         } = body;
 
-        let node = N::init(node_id, node_ids);
+        let node = N::init(node_id, node_ids, ());
 
         {
             let mut output = std::io::stdout().lock();

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    let node = NodeHandler::<()>::init_node::<EchoNode>().await;
+    let node = NodeHandler::<()>::init_node::<EchoNode, ()>(()).await;
     let service = JsonLayer::<_, Message<EchoRequest>>::new(node);
     let handler = NodeHandler::new(service);
     handler.run().await;
@@ -18,7 +18,7 @@ async fn main() {
 struct EchoNode;
 
 impl Node for EchoNode {
-    fn init(_node_id: String, _node_ids: Vec<String>, state: ()) -> Self {
+    fn init(_node_id: String, _node_ids: Vec<String>, _state: ()) -> Self {
         Self
     }
 }

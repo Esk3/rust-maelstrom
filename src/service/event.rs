@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Debug,
     sync::{Arc, Mutex},
 };
 
@@ -24,7 +25,7 @@ impl<S, Req> EventLayer<S, Req> {
 impl<S, Req> Service<Message<Req>> for EventLayer<S, Req>
 where
     S: Service<Message<Req>> + Clone + Send + 'static,
-    Req: Send + Clone + AsBodyId + 'static,
+    Req: Send + Clone + AsBodyId + 'static + Debug,
 {
     type Response = Option<S::Response>;
 
@@ -41,20 +42,18 @@ where
     }
 }
 
-// TODO message id.
 #[derive(Debug, Clone)]
 pub struct EventBroker<T>(Arc<Mutex<HashMap<MessageId, tokio::sync::oneshot::Sender<Message<T>>>>>);
 
 impl<T> EventBroker<T>
 where
-    T: AsBodyId,
+    T: AsBodyId + Debug,
 {
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(HashMap::new())))
     }
 
-    // TODO return val?
     pub fn publish_message_recived(&self, message: Message<T>) -> Result<(), Message<T>> {
         let id = MessageId {
             this: message.dest.to_string(),
@@ -63,13 +62,12 @@ where
         };
         match self.0.lock().unwrap().remove(&id) {
             Some(tx) => {
-                tx.send(message);
+                tx.send(message)?;
                 Ok(())
             }
             None => Err(message),
         }
     }
-    // TODO return val?
     pub fn publish_message_from_self(&self, message: Message<T>) -> Result<(), Message<T>> {
         let id = MessageId {
             this: message.src.to_string(),
@@ -78,7 +76,7 @@ where
         };
         match self.0.lock().unwrap().remove(&id) {
             Some(tx) => {
-                tx.send(message);
+                tx.send(message)?;
                 Ok(())
             }
             None => Err(message),
@@ -102,7 +100,7 @@ where
 
 impl<T> Default for EventBroker<T>
 where
-    T: AsBodyId,
+    T: AsBodyId + Debug,
 {
     fn default() -> Self {
         Self::new()
@@ -120,5 +118,8 @@ pub struct MessageId {
 pub struct BodyId(String);
 
 pub trait AsBodyId {
-    fn as_body_id(&self) -> BodyId;
+    fn as_raw_id(&self) -> String;
+    fn as_body_id(&self) -> BodyId {
+        BodyId(self.as_raw_id())
+    }
 }
