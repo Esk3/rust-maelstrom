@@ -66,7 +66,7 @@ impl<S> NodeHandler<S> {
     pub fn new(service: S) -> Self {
         Self { service }
     }
-    pub async fn run_with_io<R, W, Res>(self, reader: R, writer: W)
+    pub async fn run_with_io<R, W, Res>(self, reader: R, writer: Arc<Mutex<W>>)
     where
         R: tokio::io::AsyncRead + Unpin,
         S: Service<String, Response = Option<Res>> + Clone + Send + 'static,
@@ -74,10 +74,10 @@ impl<S> NodeHandler<S> {
         W: std::io::Write + Send + 'static,
     {
         let mut lines = tokio::io::BufReader::new(reader).lines();
-        let output = Arc::new(Mutex::new(writer));
+        //let output = Arc::new(Mutex::new(writer));
         while let Ok(Some(line)) = lines.next_line().await {
             let mut this = self.service.clone();
-            let output = Arc::clone(&output);
+            let output = Arc::clone(&writer);
             // TODO joinset to hold handles?
             let _handle = tokio::spawn(async move {
                 let response = this.call(line).await.unwrap();
@@ -96,7 +96,7 @@ impl<S> NodeHandler<S> {
         S: Service<String, Response = Option<Res>> + Send + Clone + 'static,
         Res: Serialize + Send + Debug,
     {
-        self.run_with_io(tokio::io::stdin(), std::io::stdout())
+        self.run_with_io(tokio::io::stdin(), Arc::new(Mutex::new(std::io::stdout())))
             .await;
     }
 }

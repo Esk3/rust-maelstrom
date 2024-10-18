@@ -1,5 +1,12 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
 use rust_maelstrom::{
     error,
+    id_counter::SeqIdCounter,
+    maelstrom_service::lin_kv::{LinKvClient, LinKvInput},
     message::Message,
     node_handler::NodeHandler,
     service::{
@@ -7,57 +14,60 @@ use rust_maelstrom::{
         json::JsonLayer,
         Service,
     },
-    Fut,
-    Node, //server::{HandlerInput, HandlerResponse, Server},
+    Fut, Node,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // router service. json deserializes input<Input, LinKvInput>. router input<Input, LinKvInput>
-    // and gives to node or linkv client
+    let w = Arc::new(Mutex::new(std::io::stdout()));
+    let lin_kv_client = LinKvClient::new("empty", w.clone());
     let event_broker = EventBroker::<Input>::new();
-    let node = NodeHandler::<()>::init_node::<TxnListAppendNode, _>(event_broker.clone()).await;
-    let service = JsonLayer::new(EventLayer::new(node, event_broker));
+    let node = NodeHandler::<()>::init_node::<TxnListAppendNode, _>((
+        event_broker.clone(),
+        lin_kv_client.clone(),
+    ))
+    .await;
+    let event_layer = EventLayer::new(node, event_broker);
+    let router = RoutingLayer {
+        txn: event_layer,
+        lin_kv: lin_kv_client,
+    };
+    let service = JsonLayer::new(router);
     let handler = NodeHandler::new(service);
-    handler.run().await;
+    handler.run_with_io(tokio::io::stdin(), w).await;
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-enum Route<A, B> {
-    A(A),
-    B(B),
-}
-struct Test;
-
-#[derive(Debug, Clone)]
-pub struct RoutingLayer<A, B> {
-    a: A,
-    b: B,
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Inputs {
+    Txn(Input),
+    LinKv(LinKvInput<HashMap<String, Vec<serde_json::Value>>>),
 }
 
-impl<A, B> Service<Message<Route<Input, Test>>> for RoutingLayer<A, B>
+#[derive(Debug, Clone)]
+pub struct RoutingLayer<T> {
+    txn: T,
+    lin_kv: LinKvClient<HashMap<String, Vec<serde_json::Value>>, std::io::Stdout>,
+}
+
+impl<T> Service<Message<Inputs>> for RoutingLayer<T>
 where
-    A: Service<Message<Input>, Response = Option<Message<Output>>> + Clone + Send + 'static,
-    B: Service<Message<Test>> + Clone + Send + 'static,
+    T: Service<Message<Input>, Response = Option<Message<Output>>> + Clone + Send + 'static,
 {
     type Response = Option<Message<Output>>;
 
     type Future = Fut<Self::Response>;
 
-    fn call(&mut self, request: Message<Route<Input, Test>>) -> Self::Future {
+    fn call(&mut self, request: Message<Inputs>) -> Self::Future {
         let mut this = self.clone();
         Box::pin(async move {
             let (msg, body) = request.split();
             match body {
-                Route::A(input) => this.a.call(msg.with_body(input)).await,
-                Route::B(test) => {
-                    this.b.call(msg.with_body(test)).await?;
+                Inputs::Txn(body) => this.txn.call(msg.with_body(body)).await,
+                Inputs::LinKv(body) => {
+                    this.lin_kv.handle_message(msg.with_body(body));
                     Ok(None)
                 }
             }
@@ -66,10 +76,33 @@ where
 }
 
 #[derive(Debug, Clone)]
-struct TxnListAppendNode {}
-impl Node<EventBroker<Input>> for TxnListAppendNode {
-    fn init(node_id: String, node_ids: Vec<String>, state: EventBroker<Input>) -> Self {
-        todo!()
+struct TxnListAppendNode {
+    node_id: String,
+    event_broker: EventBroker<Input>,
+    lin_kv_client: LinKvClient<HashMap<String, Vec<serde_json::Value>>, std::io::Stdout>,
+    id_counter: SeqIdCounter,
+}
+impl
+    Node<(
+        EventBroker<Input>,
+        LinKvClient<HashMap<String, Vec<serde_json::Value>>, std::io::Stdout>,
+    )> for TxnListAppendNode
+{
+    fn init(
+        node_id: String,
+        _node_ids: Vec<String>,
+        (event_broker, lin_kv_client): (
+            EventBroker<Input>,
+            LinKvClient<HashMap<String, Vec<serde_json::Value>>, std::io::Stdout>,
+        ),
+    ) -> Self {
+        lin_kv_client.set_src(&node_id);
+        Self {
+            node_id,
+            event_broker,
+            lin_kv_client,
+            id_counter: SeqIdCounter::new(),
+        }
     }
 }
 
@@ -86,110 +119,57 @@ impl Service<Message<Input>> for TxnListAppendNode {
 
 impl TxnListAppendNode {
     async fn handle_message(&self, message: Message<Input>) -> Option<Message<Output>> {
-        let (msg, body) = message.split();
+        let (reply, body) = message.into_reply();
         match body {
-            Input::Txn { msg_id, txn } => todo!(),
+            Input::Txn { msg_id, txn } => {
+                let txn = self.handle_txn(txn).await;
+                Some(reply.with_body(Output::TxnOk {
+                    in_reply_to: msg_id,
+                    txn: txn.unwrap(),
+                }))
+            }
         }
+    }
+
+    async fn handle_txn(&self, txn: Vec<Txn>) -> Result<Vec<Txn>, error::Error> {
+        let old_tree = self
+            .lin_kv_client
+            .read(0, self.id_counter.next_id())
+            .await
+            .unwrap();
+        let old_tree = if let Some(old_tree) = old_tree {
+            old_tree
+        } else {
+            self.lin_kv_client
+                .send_write(0, HashMap::new(), self.id_counter.next_id())
+                .await
+                .unwrap();
+            HashMap::new()
+        };
+        let mut new_tree = old_tree.clone();
+        let txn = txn
+            .into_iter()
+            .map(|op| match op {
+                Txn::Read(r, key, _) => {
+                    let values = new_tree.entry(key.to_string()).or_default().clone();
+                    Txn::Read(r, key, Some(values))
+                }
+                Txn::Append(a, key, new_value) => {
+                    new_tree
+                        .entry(key.to_string())
+                        .or_default()
+                        .push(new_value.clone());
+                    Txn::Append(a, key, new_value)
+                }
+            })
+            .collect();
+        self.lin_kv_client
+            .cas(0, old_tree, new_tree, self.id_counter.next_id())
+            .await
+            .map(|()| txn)
     }
 }
 
-//
-//#[derive(Debug)]
-//struct Node {
-//    id: String,
-//}
-//
-//impl Node {}
-//
-//impl rust_maelstrom::Node for Node {
-//    fn init(node_id: String, _node_ids: Vec<String>, state: ()) -> Self {
-//        Self { id: node_id }
-//    }
-//}
-//
-//#[derive(Debug, Clone)]
-//struct Handler;
-//impl rust_maelstrom::service::Service<HandlerInput<Input, Node>> for Handler {
-//    type Response = HandlerResponse<Message<Output>, Input>;
-//
-//    type Future = rust_maelstrom::Fut<Self::Response>;
-//
-//    fn call(
-//        &mut self,
-//        HandlerInput {
-//            event,
-//            node,
-//            event_broker,
-//        }: rust_maelstrom::server::HandlerInput<Input, Node>,
-//    ) -> Self::Future {
-//        match event {
-//            Event::Maelstrom(msg) => {
-//                Box::pin(async move { handle_message(node, msg, event_broker).await })
-//            }
-//            Event::Injected(msg) => panic!("handler got unexpected message: {msg:?}"),
-//        }
-//    }
-//}
-//
-//async fn handle_message(
-//    node: Arc<Mutex<Node>>,
-//    message: Message<Input>,
-//    event_broker: EventBroker<Input>,
-//) -> anyhow::Result<HandlerResponse<Message<Output>, Input>> {
-//    let (reply, body) = message.into_reply();
-//    match body {
-//        Input::Txn { msg_id, txn } => {
-//            let txn = handle_txn(node, txn, event_broker).await;
-//            match txn {
-//                Ok(txn) => Ok(HandlerResponse::Response(reply.with_body(Output::TxnOk {
-//                    in_reply_to: msg_id,
-//                    txn,
-//                }))),
-//                Err(error) => Ok(HandlerResponse::Error(
-//                    reply.with_body(error.set_in_reply_to(msg_id)),
-//                )),
-//            }
-//        }
-//        Input::LinKv(_) => Ok(HandlerResponse::Event(Event::Injected(
-//            reply.into_reply().0.with_body(body),
-//        ))),
-//    }
-//}
-//
-//async fn handle_txn(
-//    node: Arc<Mutex<Node>>,
-//    txn: Vec<Txn>,
-//    event_broker: EventBroker<Input>,
-//) -> Result<Vec<Txn>, error::Error> {
-//    let node_id;
-//    {
-//        let node = node.lock().unwrap();
-//        node_id = node.id.clone();
-//    }
-//    let lin_kv_client = LinKv::new(node_id.clone(), event_broker.clone());
-//    let old_tree = lin_kv_client.read_or_default(0).await.unwrap();
-//    let mut new_tree = old_tree.clone();
-//    let txn = txn
-//        .into_iter()
-//        .map(|op| match op {
-//            Txn::Read(r, key, _) => {
-//                // to string because serde_json::value::String(x) != serde_json::value::Number(x).
-//                // but to maelstrom "1" == 1
-//                let values = new_tree.entry(key.to_string()).or_default().clone();
-//                Txn::Read(r, key, Some(values))
-//            }
-//            Txn::Append(a, key, new_value) => {
-//                new_tree
-//                    .entry(key.to_string())
-//                    .or_default()
-//                    .push(new_value.clone());
-//                Txn::Append(a, key, new_value)
-//            }
-//        })
-//        .collect();
-//    lin_kv_client.cas(0, old_tree, new_tree).await.map(|()| txn)
-//}
-//
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Input {
@@ -201,7 +181,7 @@ enum Input {
 impl AsBodyId for Input {
     fn as_raw_id(&self) -> String {
         match self {
-            Input::Txn { msg_id, txn } => msg_id.to_string(),
+            Input::Txn { msg_id, txn: _ } => msg_id.to_string(),
         }
     }
 }

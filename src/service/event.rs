@@ -64,7 +64,13 @@ impl<Key, T> EventStore<Key, T> {
     }
 }
 
-#[derive(Debug, Clone)]
+impl<T> Clone for EventBroker<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+#[derive(Debug)]
 pub struct EventBroker<T>(Arc<Mutex<EventStore<MessageId, Message<T>>>>);
 
 impl<T> EventBroker<T>
