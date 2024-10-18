@@ -84,6 +84,16 @@ where
     }
 }
 
+impl<K, V> Default for EventQueue<K, V>
+where
+    K: Hash + Eq + PartialEq + Clone + Debug,
+    V: Clone + Debug,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::message::Message;
