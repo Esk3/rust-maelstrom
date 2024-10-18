@@ -7,7 +7,7 @@ use super::Service;
 #[derive(Debug)]
 pub struct JsonLayer<S, Req>(S, std::marker::PhantomData<Req>);
 
-impl<S, Res> JsonLayer<S, Res> {
+impl<S, Req> JsonLayer<S, Req> {
     pub fn new(s: S) -> Self {
         Self(s, std::marker::PhantomData)
     }

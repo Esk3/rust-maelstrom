@@ -76,6 +76,7 @@ where
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct TxnListAppendNode {
     node_id: String,
     event_broker: EventBroker<Input>,

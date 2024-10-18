@@ -7,16 +7,6 @@ use crate::error;
 use crate::message::Message;
 use crate::service::event::{AsBodyId, EventBroker};
 
-impl<T, W> Clone for LinKvClient<T, W> {
-    fn clone(&self) -> Self {
-        Self {
-            src: Arc::clone(&self.src),
-            event_broker: self.event_broker.clone(),
-            w: Arc::clone(&self.w),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct LinKvClient<T, W> {
     src: Arc<Mutex<String>>,
@@ -245,6 +235,16 @@ impl<K, V> AsBodyId for LinKvOutput<K, V> {
                 to: _,
                 msg_id,
             } => msg_id.to_string(),
+        }
+    }
+}
+
+impl<T, W> Clone for LinKvClient<T, W> {
+    fn clone(&self) -> Self {
+        Self {
+            src: Arc::clone(&self.src),
+            event_broker: self.event_broker.clone(),
+            w: Arc::clone(&self.w),
         }
     }
 }

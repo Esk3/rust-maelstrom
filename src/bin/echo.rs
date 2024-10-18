@@ -1,80 +1,62 @@
 use rust_maelstrom::{
-    //event::{Event, EventId},
     message::Message,
-    service::Service,
-    Fut,
-    Node,
+    node_handler::NodeHandler,
+    service::{json::JsonLayer, Service},
+    Fut, Node,
 };
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    todo!()
-    //let s = rust_maelstrom::server::Server::new(Handler);
-    //s.run().await?;
-    //Ok(())
+async fn main() {
+    let node = NodeHandler::<()>::init_node::<EchoNode, ()>(()).await;
+    let service = JsonLayer::<_, Message<EchoRequest>>::new(node);
+    let handler = NodeHandler::new(service);
+    handler.run().await;
 }
-//
-//#[derive(Clone)]
-//pub struct Handler;
-//impl Service<rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>> for Handler {
-//    type Response =
-//        rust_maelstrom::server::HandlerResponse<Message<MessageResponse>, MessageRequest>;
-//
-//    type Future = Fut<Self::Response>;
-//
-//    fn call(
-//        &mut self,
-//        request: rust_maelstrom::server::HandlerInput<MessageRequest, EchoNode>,
-//    ) -> Self::Future {
-//        let Event::Maelstrom(message) = request.event else {
-//            panic!();
-//        };
-//        let (msg, body) = message.into_reply();
-//        match body {
-//            MessageRequest::Echo { echo, msg_id } => Box::pin(async move {
-//                Ok(rust_maelstrom::server::HandlerResponse::Response(
-//                    msg.with_body(MessageResponse::EchoOk {
-//                        echo,
-//                        in_reply_to: msg_id,
-//                    }),
-//                ))
-//            }),
-//        }
-//    }
-//}
-//
-//#[derive(Debug)]
-//struct EchoNode {
-//    pub _id: String,
-//}
-//
-//impl Node for EchoNode {
-//    fn init(node_id: String, _node_ids: Vec<String>) -> Self {
-//        Self { _id: node_id }
-//    }
-//}
-//
-//#[derive(Debug, Serialize, Deserialize, Clone)]
-//#[serde(tag = "type", rename_all = "snake_case")]
-//pub enum MessageRequest {
-//    Echo {
-//        echo: serde_json::Value,
-//        msg_id: usize,
-//    },
-//}
-//
-//impl EventId for MessageRequest {
-//    fn get_event_id(&self) -> usize {
-//        todo!()
-//    }
-//}
-//
-//#[derive(Debug, Serialize, Deserialize)]
-//#[serde(tag = "type", rename_all = "snake_case")]
-//pub enum MessageResponse {
-//    EchoOk {
-//        echo: serde_json::Value,
-//        in_reply_to: usize,
-//    },
-//}
+
+#[derive(Clone)]
+struct EchoNode;
+
+impl Node for EchoNode {
+    fn init(_node_id: String, _node_ids: Vec<String>, _state: ()) -> Self {
+        Self
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EchoRequest {
+    Echo {
+        echo: serde_json::Value,
+        msg_id: usize,
+    },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EchoResponse {
+    EchoOk {
+        echo: serde_json::Value,
+        in_reply_to: usize,
+    },
+}
+
+impl Service<Message<EchoRequest>> for EchoNode {
+    type Response = Option<Message<EchoResponse>>;
+
+    type Future = Fut<Self::Response>;
+
+    fn call(&mut self, request: Message<EchoRequest>) -> Self::Future {
+        Box::pin(async move {
+            let (response, body) = request.into_reply();
+            match body {
+                EchoRequest::Echo { echo, msg_id } => {
+                    Ok(Some(response.with_body(EchoResponse::EchoOk {
+                        echo,
+                        in_reply_to: msg_id,
+                    })))
+                }
+            }
+        })
+    }
+}
